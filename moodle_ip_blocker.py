@@ -108,11 +108,11 @@ def call_moodle_cli(config, ip_address):
 if __name__ == "__main__":
     start_time = datetime.now()
     start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-    # Note: Logging might fail if config reading below fails, but we try.
-
     end_time = None
     duration = None
-
+    cnx = None
+    cursor = None
+    
     try:
         logger.info(f"Script execution started at: {start_time_str}")
 
