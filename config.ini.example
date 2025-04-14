@@ -1,0 +1,18 @@
+[database]
+host = localhost
+user = your_moodle_db_user
+password = your_moodle_db_password
+name = your_moodle_db_name
+table_prefix = mdl_ ; Adjust if using a different prefix
+
+[rules]
+failure_threshold = 10 ; Number of failures from one IP since last check to trigger block
+
+[moodle]
+wwwroot = /var/www/html/moodle ; Adjust if using a different Moodle installation path
+php_executable = /usr/bin/php ; Path to PHP CLI executable
+web_server_user = www-data ; User the web server runs as (e.g., www-data, apache, nginx) - Needed for sudo
+cli_script_path = local/customscripts/cli/block_ip.php ; Relative path within moodle dir to the CLI script below
+
+[fail2ban]
+log_path = /var/log/moodle_failed_logins.log ; Path Fail2ban will monitor

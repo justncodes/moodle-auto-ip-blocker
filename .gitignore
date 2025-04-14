@@ -1,0 +1,5 @@
+*
+!.gitignore
+!*.php
+!*.py
+!config.ini.example
