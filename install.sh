@@ -105,23 +105,18 @@ if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PASS" || -z "$D
 print_info "Successfully extracted Moodle DB configuration and prefix."
 
 # 7. Get Web Server User AND VERIFY EXISTENCE
-print_info "Attempting to determine web server user (needed for sudo)..."
+print_info "Attempting to determine web server user..."
 if id -u "daemon" > /dev/null 2>&1; then DETECTED_WEB_USER="daemon"; print_info "Detected possible user 'daemon'.";
 elif ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null; then DETECTED_WEB_USER="www-data"; print_info "Detected Apache process, suggesting user '${DETECTED_WEB_USER}'.";
 elif ps aux | grep 'nginx' | grep -v grep > /dev/null; then DETECTED_WEB_USER="www-data"; print_info "Detected Nginx process, suggesting user '${DETECTED_WEB_USER}'.";
 else DETECTED_WEB_USER="${DEFAULT_WEB_USER}"; print_warning "Could not detect common web server process. Suggesting default '${DETECTED_WEB_USER}'."; fi
-
 read -p "Please enter the EXACT username your web server (Apache/Nginx) runs as [${DETECTED_WEB_USER}]: " USER_WEB_USER
 WEB_USER=${USER_WEB_USER:-$DETECTED_WEB_USER}
 print_info "Using web server user: ${WEB_USER}"
-
 print_info "Verifying that user '${WEB_USER}' exists on this system..."
 if ! id -u "$WEB_USER" > /dev/null 2>&1; then
     print_error "--------------------------------------------------------------------"
     print_error "FATAL: User '${WEB_USER}' not found on this system!"
-    print_error "The Python script needs the correct username that your web server"
-    print_error "(Apache/Nginx) uses to run the Moodle PHP CLI script via sudo."
-    print_error "Common users in Bitnami: 'daemon', 'bitnami'. Standard Debian: 'www-data'."
     print_error "Please determine the correct user (e.g., run 'ps aux | egrep '(apache|httpd|nginx)'')"
     print_error "and re-run this setup script, providing the correct username when prompted."
     print_error "--------------------------------------------------------------------"
@@ -184,57 +179,24 @@ if [[ ! -f "$MOODLE_CLI_FULL_PATH" ]]; then
     print_info "Set ownership of Moodle CLI script to root:${WEB_USER}."
 else
     print_warning "Moodle CLI script ${MOODLE_CLI_FULL_PATH} already exists. Skipping placement."
-    if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then
-        rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"
-    fi
+    if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
 fi
 
-# 11. Configure sudo
-SUDOERS_LINE="root ALL=(${WEB_USER}) NOPASSWD: ${PHP_EXEC} ${MOODLE_CLI_FULL_PATH} --ip=*"
-SUDOERS_FILE="/etc/sudoers"
-SUDOERS_TEMP_FILE=$(mktemp)
-print_info "Configuring sudoers..."
-if ! grep -Fxq "${SUDOERS_LINE}" "${SUDOERS_FILE}"; then
-    print_info "Adding sudo rule for root to run Moodle CLI script as ${WEB_USER}."; cp "${SUDOERS_FILE}" "${SUDOERS_TEMP_FILE}"; echo "${SUDOERS_LINE}" >> "${SUDOERS_TEMP_FILE}"
-    if visudo -qcf "${SUDOERS_TEMP_FILE}"; then print_info "Sudoers syntax check passed. Applying changes."; cp "${SUDOERS_TEMP_FILE}" "${SUDOERS_FILE}"; else print_error "Sudoers syntax check failed! Reverting changes."; rm "${SUDOERS_TEMP_FILE}"; exit 1; fi; rm "${SUDOERS_TEMP_FILE}"
-else print_info "Sudoers rule already exists or is similar."; rm "${SUDOERS_TEMP_FILE}"; fi
-
-# 12. Configure Fail2ban
+# 11. Configure Fail2ban (Renumbered from 12)
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking for existing Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
 if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then
-    print_info "Configuring Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
-    cat << EOF > "${FAIL2BAN_FILTER_PATH}"
-[Definition]
-failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]
-ignoreregex =
-EOF
-else
-    print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists. Skipping creation."
-fi
+    print_info "Configuring Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"; cat << EOF > "${FAIL2BAN_FILTER_PATH}"; [Definition]; failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]; ignoreregex =; EOF
+else print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists. Skipping creation."; fi
 print_info "Checking for existing Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
 if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
-    print_info "Configuring Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
-    cat << EOF > "${FAIL2BAN_JAIL_PATH}"
-[${FAIL2BAN_JAIL_NAME}]
-enabled = true
-port = http,https
-filter = ${FAIL2BAN_FILTER_NAME}
-logpath = ${FAIL2BAN_LOG_PATH}
-maxretry = 1
-findtime = 300
-bantime = 3600
-action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]
-EOF
-else
-     print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists. Skipping creation."
-     print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."
-fi
+    print_info "Configuring Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"; cat << EOF > "${FAIL2BAN_JAIL_PATH}"; [${FAIL2BAN_JAIL_NAME}]; enabled = true; port = http,https; filter = ${FAIL2BAN_FILTER_NAME}; logpath = ${FAIL2BAN_LOG_PATH}; maxretry = 1; findtime = 300; bantime = 3600; action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]; EOF
+else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists. Skipping creation."; print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."; fi
 print_info "Reloading Fail2ban configuration..."
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
 
-# 13. Setup Cron Job
+# 12. Setup Cron Job (Renumbered from 13)
 CRON_FILE_PATH="/etc/cron.d/${CRON_FILE_NAME}"
 PYTHON_EXEC_VENV="${VENV_DIR}/bin/python3"
 print_info "Setting up cron job: ${CRON_FILE_PATH}"
@@ -247,7 +209,7 @@ EOF
 chmod 0644 "${CRON_FILE_PATH}"
 systemctl enable cron; systemctl restart cron
 
-# 14. Create Log Files and Set Initial Permissions
+# 13. Create Log Files and Set Initial Permissions (Renumbered from 14)
 print_info "Creating log files and setting initial permissions..."
 touch "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${FAIL2BAN_LOG_PATH}"
 chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${VENV_DIR}" -R
@@ -274,7 +236,7 @@ print_warning "The setup automatically used the PHP executable found at: '${PHP_
 print_warning "PLEASE VERIFY that this is the correct PHP CLI version for your Moodle installation."
 print_warning "If it's incorrect, the IP blocking process might fail."
 echo ""
-print_warning "To change PHP Path: edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME} AND update sudoers rule."
+print_warning "To change PHP Path: edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME}."
 echo ""
 print_warning "Review ${APP_DIR}/${CONFIG_NAME} and Fail2ban configs if you need to adjust thresholds/bantime."
 echo ""
