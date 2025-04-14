@@ -1,10 +1,24 @@
 <?php
 // This script is designed to be run from the command line.
 
+// Define CLI_SCRIPT *before* including config.php
 define('CLI_SCRIPT', true);
 
-// Adjust the path to your Moodle config.php
-require(__DIR__.'/../../../../config.php'); // Go up 4 levels from local/customscripts/cli/ to moodle root
+// Find config.php relative to this script's location.
+// Go up 4 levels: local/customscripts/cli -> local/customscripts -> local -> moodle root
+$moodleroot = dirname(dirname(dirname(dirname(__FILE__))));
+$configfile = $moodleroot . '/config.php';
+
+// Check if config file exists before trying to require it
+if (!file_exists($configfile)) {
+    fwrite(STDERR, "Error: Moodle config file not found at expected location: {$configfile}\n");
+    exit(1);
+}
+
+// Require Moodle config - this defines $CFG
+require_once($configfile);
+
+// Now require libraries using $CFG->libdir which is defined by config.php
 require_once($CFG->libdir.'/clilib.php');
 require_once($CFG->libdir.'/adminlib.php'); // Need this for set_config
 
@@ -28,8 +42,8 @@ Options:
 -h, --help          Print this help.
 
 Example:
-\$ sudo -u www-data /usr/bin/php local/customscripts/cli/block_ip.php --ip=192.168.1.100
-EOS;
+\$ sudo -u www-data /usr/bin/php {$CFG->dirroot}/local/customscripts/cli/block_ip.php --ip=192.168.1.100
+EOS; // Use $CFG->dirroot in help text too
     echo $help;
     exit(0);
 }
@@ -45,26 +59,19 @@ cli_heading('Moodle IP Blocker CLI');
 cli_writeln("Attempting to block IP: " . $ip_to_block);
 
 // --- Core Logic ---
-// Get the current list
 $blockedips = get_config('tool_ipblocker', 'blockedips');
-$ip_list = preg_split('/[\s,]+/', $blockedips ?? '', -1, PREG_SPLIT_NO_EMPTY); // Split by space, comma, newline etc.
+$ip_list = preg_split('/[\s,]+/', $blockedips ?? '', -1, PREG_SPLIT_NO_EMPTY);
 
-// Check if already blocked
 if (in_array($ip_to_block, $ip_list)) {
     cli_writeln("IP address {$ip_to_block} is already in the block list.");
     exit(0);
 }
 
-// Add the new IP
 $ip_list[] = $ip_to_block;
-
-// Join back into a string
 $new_list_string = implode("\n", $ip_list);
 
-// Save the updated list
 if (set_config('blockedips', $new_list_string, 'tool_ipblocker')) {
     cli_writeln("Successfully added {$ip_to_block} to the Moodle IP block list.");
-    // Purge caches related to config just in case
     \core\cache\config::purge_all();
     exit(0);
 } else {
