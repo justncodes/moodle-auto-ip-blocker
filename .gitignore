@@ -3,3 +3,4 @@
 !*.php
 !*.py
 !config.ini.example
+!install.sh
