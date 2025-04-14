@@ -22,13 +22,13 @@ FAIL2BAN_FILTER_NAME="moodle-auth-custom"
 FAIL2BAN_JAIL_NAME="moodle-custom"
 CRON_FILE_NAME="moodle-blocker"
 
-# Default values, some will be overwritten
+# Default values, some may be overwritten
 DEFAULT_MOODLE_ROOT="/var/www/html/moodle"
 DEFAULT_WEB_USER="www-data"
 DEFAULT_PHP_EXEC_FALLBACK="/usr/bin/php"
 MOODLE_CLI_REL_PATH="local/customscripts/cli"
 
-# Variables to be populated from config.php or user input
+# Variables to be populated from config.php
 MOODLE_ROOT=""
 DB_HOST=""
 DB_NAME=""
@@ -71,10 +71,10 @@ pip install mysql-connector-python
 DEFAULT_CONFIG_PATH="${DEFAULT_MOODLE_ROOT}/config.php"
 if [[ -f "$DEFAULT_CONFIG_PATH" ]]; then print_info "Found Moodle config at default location: ${DEFAULT_MOODLE_ROOT}"; MOODLE_ROOT="$DEFAULT_MOODLE_ROOT"; else
     print_warning "Moodle config.php not found at default location (${DEFAULT_MOODLE_ROOT})."
-    while true; do read -p "Please enter the full path to your Moodle directory: " USER_MOODLE_ROOT; USER_MOODLE_ROOT=${USER_MOODLE_ROOT%/}
-        if [[ -f "${USER_MOODLE_ROOT}/config.php" ]]; then MOODLE_ROOT="$USER_MOODLE_ROOT"; print_info "Using Moodle directory: ${MOODLE_ROOT}"; break
-        else print_error "Error: config.php not found in '${USER_MOODLE_ROOT}'. Please try again."; fi
-    done; fi
+    print_error "Cannot proceed without Moodle config.php found at ${DEFAULT_MOODLE_ROOT}."
+    print_error "Please ensure Moodle is installed at the default path or modify this script."
+    exit 1
+fi
 MOODLE_CONFIG_PATH="${MOODLE_ROOT}/config.php"
 
 # 5. Determine PHP Executable Path
@@ -104,25 +104,42 @@ while IFS='=' read -r key value; do case "$key" in dbhost) DB_HOST="$value" ;; d
 if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PASS" || -z "$DB_PREFIX" ]]; then print_error "Could not extract all required DB variables/prefix from the PHP script output."; exit 1; fi
 print_info "Successfully extracted Moodle DB configuration and prefix."
 
-# 7. Get Web Server User AND VERIFY EXISTENCE
-print_info "Attempting to determine web server user..."
-if id -u "daemon" > /dev/null 2>&1; then DETECTED_WEB_USER="daemon"; print_info "Detected possible user 'daemon'.";
-elif ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null; then DETECTED_WEB_USER="www-data"; print_info "Detected Apache process, suggesting user '${DETECTED_WEB_USER}'.";
-elif ps aux | grep 'nginx' | grep -v grep > /dev/null; then DETECTED_WEB_USER="www-data"; print_info "Detected Nginx process, suggesting user '${DETECTED_WEB_USER}'.";
-else DETECTED_WEB_USER="${DEFAULT_WEB_USER}"; print_warning "Could not detect common web server process. Suggesting default '${DETECTED_WEB_USER}'."; fi
-read -p "Please enter the EXACT username your web server (Apache/Nginx) runs as [${DETECTED_WEB_USER}]: " USER_WEB_USER
-WEB_USER=${USER_WEB_USER:-$DETECTED_WEB_USER}
-print_info "Using web server user: ${WEB_USER}"
-print_info "Verifying that user '${WEB_USER}' exists on this system..."
+# 7. Determine Web Server User AND VERIFY EXISTENCE (Non-Interactive)
+print_info "Attempting to automatically determine web server user..."
+DETECTED_WEB_USER=""
+
+if ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then
+    DETECTED_WEB_USER="www-data"
+    print_info "Detected Apache process and 'www-data' user exists."
+elif ps aux | grep 'nginx' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then
+    DETECTED_WEB_USER="www-data"
+    print_info "Detected Nginx process and 'www-data' user exists."
+elif id -u "daemon" > /dev/null 2>&1; then
+    DETECTED_WEB_USER="daemon"
+    print_info "Detected 'daemon' user exists (commonly used by Bitnami Apache)."
+fi
+
+if [[ -z "$DETECTED_WEB_USER" ]]; then
+    WEB_USER="${DEFAULT_WEB_USER}"
+    print_warning "Could not automatically detect a common web server user ('www-data' or 'daemon')."
+    print_warning "Falling back to default: '${WEB_USER}'."
+else
+    WEB_USER="$DETECTED_WEB_USER"
+    print_info "Using automatically detected web server user: ${WEB_USER}"
+fi
+
+print_info "Verifying that automatically chosen user '${WEB_USER}' exists on this system..."
 if ! id -u "$WEB_USER" > /dev/null 2>&1; then
     print_error "--------------------------------------------------------------------"
-    print_error "FATAL: User '${WEB_USER}' not found on this system!"
-    print_error "Please determine the correct user (e.g., run 'ps aux | egrep '(apache|httpd|nginx)'')"
-    print_error "and re-run this setup script, providing the correct username when prompted."
+    print_error "FATAL: The automatically chosen web server user '${WEB_USER}' not found on this system!"
+    print_error "Please determine the correct user your web server runs as (e.g., 'ps aux | egrep '(apache|httpd|nginx)'')."
+    print_error "Then, manually edit the 'web_server_user' setting in ${APP_DIR}/${CONFIG_NAME}"
+    print_error "and the ownership of the Moodle CLI script before the cron job runs."
+    print_error "Path: ${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}"
     print_error "--------------------------------------------------------------------"
     exit 1
 else
-    print_info "User '${WEB_USER}' confirmed to exist."
+    print_info "Automatically chosen user '${WEB_USER}' confirmed to exist."
 fi
 
 # 8. Download Scripts
@@ -182,7 +199,7 @@ else
     if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
 fi
 
-# 11. Configure Fail2ban (Renumbered from 12)
+# 11. Configure Fail2ban
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking for existing Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
@@ -195,6 +212,7 @@ if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
 else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists. Skipping creation."; print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."; fi
 print_info "Reloading Fail2ban configuration..."
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
+EOF
 
 # 12. Setup Cron Job (Renumbered from 13)
 CRON_FILE_PATH="/etc/cron.d/${CRON_FILE_NAME}"
@@ -216,7 +234,6 @@ chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${V
 chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}"
 chown root:root "${FAIL2BAN_LOG_PATH}"; chgrp adm "${FAIL2BAN_LOG_PATH}" || true; chmod 640 "${FAIL2BAN_LOG_PATH}"
 
-# --- Final Instructions ---
 echo ""
 print_info "---------------------------------------------------------------------"
 print_info " Moodle Auto IP Blocker Setup Complete!"
@@ -225,18 +242,20 @@ echo ""
 print_info "Configuration based on:"
 echo "  - Moodle Directory: ${MOODLE_ROOT}"
 echo "  - Moodle config:    ${MOODLE_CONFIG_PATH}"
-echo "  - VALIDATED Web User: ${WEB_USER}"
+echo "  - Web User:         ${WEB_USER}"
 echo "  - PHP Path Used:    ${PHP_EXEC}"
 echo ""
 print_info "Python dependencies installed in virtual environment: ${VENV_DIR}"
 echo ""
 print_warning "!!!!!!!!!!!!!!!!!!!! IMPORTANT VERIFICATION !!!!!!!!!!!!!!!!!!!!"
 echo ""
-print_warning "The setup automatically used the PHP executable found at: '${PHP_EXEC}'."
-print_warning "PLEASE VERIFY that this is the correct PHP CLI version for your Moodle installation."
-print_warning "If it's incorrect, the IP blocking process might fail."
+print_warning "The setup automatically used PHP executable: '${PHP_EXEC}'."
+print_warning "The setup automatically used Web Server User: '${WEB_USER}'."
 echo ""
-print_warning "To change PHP Path: edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME}."
+print_warning "PLEASE VERIFY these are correct for your specific Moodle installation."
+print_warning "If PHP path is wrong, edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME}."
+print_warning "If Web User is wrong, edit 'web_server_user' in ${APP_DIR}/${CONFIG_NAME} AND"
+print_warning "manually run 'sudo chown root:${CORRECT_USER} ${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}'"
 echo ""
 print_warning "Review ${APP_DIR}/${CONFIG_NAME} and Fail2ban configs if you need to adjust thresholds/bantime."
 echo ""
