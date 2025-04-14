@@ -204,17 +204,37 @@ FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking for existing Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
 if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then
-    print_info "Configuring Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"; cat << EOF > "${FAIL2BAN_FILTER_PATH}"; [Definition]; failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]; ignoreregex =; EOF
-else print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists. Skipping creation."; fi
+    print_info "Configuring Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
+    cat << EOF > "${FAIL2BAN_FILTER_PATH}"
+[Definition]
+failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]
+ignoreregex =
+EOF
+else
+    print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists. Skipping creation."
+fi
 print_info "Checking for existing Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
 if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
-    print_info "Configuring Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"; cat << EOF > "${FAIL2BAN_JAIL_PATH}"; [${FAIL2BAN_JAIL_NAME}]; enabled = true; port = http,https; filter = ${FAIL2BAN_FILTER_NAME}; logpath = ${FAIL2BAN_LOG_PATH}; maxretry = 1; findtime = 300; bantime = 3600; action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]; EOF
-else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists. Skipping creation."; print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."; fi
+    print_info "Configuring Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
+    cat << EOF > "${FAIL2BAN_JAIL_PATH}"
+[${FAIL2BAN_JAIL_NAME}]
+enabled = true
+port = http,https
+filter = ${FAIL2BAN_FILTER_NAME}
+logpath = ${FAIL2BAN_LOG_PATH}
+maxretry = 1
+findtime = 300
+bantime = 3600
+action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]
+EOF
+else
+    print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists. Skipping creation."
+    print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."
+fi
 print_info "Reloading Fail2ban configuration..."
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
-EOF
 
-# 12. Setup Cron Job (Renumbered from 13)
+# 12. Setup Cron Job
 CRON_FILE_PATH="/etc/cron.d/${CRON_FILE_NAME}"
 PYTHON_EXEC_VENV="${VENV_DIR}/bin/python3"
 print_info "Setting up cron job: ${CRON_FILE_PATH}"
@@ -227,13 +247,14 @@ EOF
 chmod 0644 "${CRON_FILE_PATH}"
 systemctl enable cron; systemctl restart cron
 
-# 13. Create Log Files and Set Initial Permissions (Renumbered from 14)
+# 13. Create Log Files and Set Initial Permissions
 print_info "Creating log files and setting initial permissions..."
 touch "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${FAIL2BAN_LOG_PATH}"
 chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${VENV_DIR}" -R
 chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}"
 chown root:root "${FAIL2BAN_LOG_PATH}"; chgrp adm "${FAIL2BAN_LOG_PATH}" || true; chmod 640 "${FAIL2BAN_LOG_PATH}"
 
+# --- Final Instructions ---
 echo ""
 print_info "---------------------------------------------------------------------"
 print_info " Moodle Auto IP Blocker Setup Complete!"
