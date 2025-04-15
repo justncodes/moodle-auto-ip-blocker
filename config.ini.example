@@ -1,18 +1,43 @@
 [database]
+# These parameters are retrieved from config.php automatically
 host = localhost
 user = your_moodle_db_user
 password = your_moodle_db_password
 name = your_moodle_db_name
-table_prefix = mdl_ ; Adjust if using a different prefix
+
+# Adjust if using a different prefix
+table_prefix = mdl_
 
 [rules]
-failure_threshold = 10 ; Number of failures from one IP since last check to trigger block
+# Number of failures from one IP since last check to trigger block
+failure_threshold = 10
 
 [moodle]
-wwwroot = /var/www/html/moodle ; Adjust if using a different Moodle installation path
-php_executable = /usr/bin/php ; Path to PHP CLI executable
-web_server_user = www-data ; User the web server runs as (e.g., www-data, apache, nginx) - Needed for sudo
-cli_script_path = local/customscripts/cli/block_ip.php ; Relative path within moodle dir to the CLI script below
+# Adjust if using a different Moodle installation path
+wwwroot = /var/www/html/moodle
+
+# Path to PHP CLI executable
+php_executable = /usr/bin/php
+
+# User the web server runs as (e.g., www-data, apache, nginx) - Needed for sudo
+web_server_user = www-data
+
+# Relative path within Moodle dir to the CLI script
+cli_script_path = local/customscripts/cli/block_ip.php
+
+# Enable email notifications for Moodle IP blocks (requires address below)
+enable_email_notification = false
+
+# Email address to send Moodle block notifications to (must be set if above is true)
+notification_email_address =
 
 [fail2ban]
-log_path = /var/log/moodle_failed_logins.log ; Path Fail2ban will monitor
+# Path Fail2ban will monitor
+log_path = /var/log/moodle_failed_logins.log
+
+[actions]
+# Set to true to block IPs using Moodle's internal IP Blocker (visible in UI)
+enable_moodle_ip_blocking = true
+
+# Set to true to block IPs using Fail2ban and firewall rules (e.g., iptables)
+enable_fail2ban_blocking = true

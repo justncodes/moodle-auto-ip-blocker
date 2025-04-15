@@ -52,8 +52,8 @@ print_info "Starting Moodle Auto IP Blocker Setup..."
 # 1. Install Dependencies
 print_info "Updating package lists..."
 apt-get update -y
-print_info "Installing dependencies (python3, python3-pip, python3-venv, fail2ban, cron)..."
-apt-get install -y python3 python3-pip python3-venv fail2ban cron
+print_info "Installing dependencies (python3, python3-pip, python3-venv, fail2ban, cron, iptables)..."
+apt-get install -y python3 python3-pip python3-venv fail2ban cron iptables
 
 # 2. Create Application Directory and Virtual Environment
 print_info "Creating application directory: ${APP_DIR}"
@@ -63,9 +63,12 @@ print_info "Creating Python virtual environment in ${VENV_DIR}..."
 python3 -m venv "${VENV_DIR}"
 
 # 3. Install Python Dependencies into Virtual Environment
-print_info "Installing mysql-connector-python into the virtual environment..."
+print_info "Activating virtual environment..."
 source "${VENV_DIR}/bin/activate"
+print_info "Installing mysql-connector-python into the virtual environment..."
 pip install mysql-connector-python
+deactivate
+print_info "Deactivated virtual environment."
 
 # 4. Determine Moodle Directory Path
 DEFAULT_CONFIG_PATH="${DEFAULT_MOODLE_ROOT}/config.php"
@@ -104,7 +107,7 @@ while IFS='=' read -r key value; do case "$key" in dbhost) DB_HOST="$value" ;; d
 if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PASS" || -z "$DB_PREFIX" ]]; then print_error "Could not extract all required DB variables/prefix from the PHP script output."; exit 1; fi
 print_info "Successfully extracted Moodle DB configuration and prefix."
 
-# 7. Determine Web Server User AND VERIFY EXISTENCE (Non-Interactive)
+# 7. Determine Web Server User
 print_info "Attempting to automatically determine web server user..."
 DETECTED_WEB_USER=""
 
@@ -146,7 +149,7 @@ fi
 print_info "Downloading Python script..."
 cd "${APP_DIR}"
 curl -fsSL "${PYTHON_SCRIPT_URL}" -o "${PYTHON_SCRIPT_NAME}"
-chmod +x "${VENV_DIR}/bin/python"
+# Make python script executable
 chmod +x "${PYTHON_SCRIPT_NAME}"
 print_info "Downloading PHP CLI script (temporary location)..."
 curl -fsSL "${PHP_CLI_SCRIPT_URL}" -o "${PHP_CLI_SCRIPT_NAME}"
@@ -157,29 +160,56 @@ if [[ ! -f "${APP_DIR}/${CONFIG_NAME}" ]]; then
     print_info "Generating configuration file: ${APP_DIR}/${CONFIG_NAME}"
     cat << EOF > "${APP_DIR}/${CONFIG_NAME}"
 [database]
+# These parameters are retrieved from config.php automatically
 host = ${DB_HOST}
 user = ${DB_USER}
 password = ${DB_PASS}
 name = ${DB_NAME}
+
+# Adjust if using a different prefix
 table_prefix = ${DB_PREFIX}
 
 [rules]
+# Number of failures from one IP since last check to trigger block
 failure_threshold = 10
 
 [moodle]
+# Adjust if using a different Moodle installation path
 wwwroot = ${MOODLE_ROOT}
+
+# Path to PHP CLI executable
 php_executable = ${PHP_EXEC}
+
+# User the web server runs as (e.g., www-data, apache, nginx) - Needed for sudo
 web_server_user = ${WEB_USER}
+
+# Relative path within Moodle dir to the CLI script
 cli_script_path = ${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}
 
+# Enable email notifications for Moodle core blocks (requires address below)
+enable_email_notification = false
+
+# Email address to send Moodle block notifications to (must be set if above is true)
+notification_email_address =
+
 [fail2ban]
+# Path Fail2ban will monitor
 log_path = ${FAIL2BAN_LOG_PATH}
+
+[actions]
+# Set to true to block IPs using Moodle's internal IP Blocker (visible in UI)
+enable_moodle_core_blocking = true
+
+# Set to true to block IPs using Fail2ban and firewall rules (e.g., iptables)
+enable_fail2ban_blocking = true
 EOF
     chmod 600 "${CONFIG_NAME}"
     print_info "Generated ${CONFIG_NAME}."
 else
     print_warning "Configuration file ${APP_DIR}/${CONFIG_NAME} already exists. Skipping generation."
     print_warning "Ensure 'web_server_user' in this file matches '${WEB_USER}'."
+    print_warning "If this is an upgrade, manually add/verify the [actions] section and the"
+    print_warning "'enable_email_notification' and 'notification_email_address' options under [moodle]."
 fi
 
 # 10. Place Moodle CLI Script
@@ -232,6 +262,9 @@ else
     print_warning "Ensure settings like 'bantime' and 'logpath' are correct manually if needed."
 fi
 print_info "Reloading Fail2ban configuration..."
+if ! command -v iptables &> /dev/null; then
+    print_warning "iptables command not found after installation attempt. Fail2ban might fail."
+fi
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
 
 # 12. Setup Cron Job
@@ -250,9 +283,14 @@ systemctl enable cron; systemctl restart cron
 # 13. Create Log Files and Set Initial Permissions
 print_info "Creating log files and setting initial permissions..."
 touch "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${FAIL2BAN_LOG_PATH}"
-chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${VENV_DIR}" -R
-chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}"
-chown root:root "${FAIL2BAN_LOG_PATH}"; chgrp adm "${FAIL2BAN_LOG_PATH}" || true; chmod 640 "${FAIL2BAN_LOG_PATH}"
+chown root:root "${APP_DIR}"
+chmod 755 "${APP_DIR}"
+chown root:root "${VENV_DIR}" -R
+chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
+chmod 600 "${APP_DIR}/${CONFIG_NAME}"
+chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
+chown root:adm "${FAIL2BAN_LOG_PATH}"
+chmod 640 "${FAIL2BAN_LOG_PATH}"
 
 # --- Final Instructions ---
 echo ""
@@ -266,6 +304,7 @@ echo "  - Moodle config:    ${MOODLE_CONFIG_PATH}"
 echo "  - Web User:         ${WEB_USER}"
 echo "  - PHP Path Used:    ${PHP_EXEC}"
 echo ""
+print_info "Dependencies installed: python3, pip, venv, fail2ban, cron, iptables"
 print_info "Python dependencies installed in virtual environment: ${VENV_DIR}"
 echo ""
 print_warning "!!!!!!!!!!!!!!!!!!!! IMPORTANT VERIFICATION !!!!!!!!!!!!!!!!!!!!"
@@ -276,18 +315,31 @@ echo ""
 print_warning "PLEASE VERIFY these are correct for your specific Moodle installation."
 print_warning "If PHP path is wrong, edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME}."
 print_warning "If Web User is wrong, edit 'web_server_user' in ${APP_DIR}/${CONFIG_NAME} AND"
-print_warning "manually run 'sudo chown root:${CORRECT_USER} ${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}'"
+print_warning "manually run 'sudo chown root:CORRECT_USER ${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}'"
 echo ""
-print_warning "Review ${APP_DIR}/${CONFIG_NAME} and Fail2ban configs if you need to adjust thresholds/bantime."
+print_warning "!!!!!!!!!!!!!!!!!!!! BLOCKING & NOTIFICATION CONFIGURATION !!!!!!!!!!!!!!!!"
+echo ""
+print_warning "By default, BOTH Moodle internal blocking AND Fail2ban logging are ENABLED."
+print_warning "To change blocking methods, edit ${APP_DIR}/${CONFIG_NAME} [actions] section:"
+echo "  - enable_moodle_core_blocking = true  (Blocks in Moodle UI, admin manageable)"
+echo "  - enable_fail2ban_blocking = true   (Logs for Fail2ban/iptables firewall block)"
+print_warning "Set either to 'false' to disable that specific blocking method."
+echo ""
+print_warning "EMAIL NOTIFICATIONS for Moodle blocks are currently DISABLED BY DEFAULT."
+print_warning "To enable, edit ${APP_DIR}/${CONFIG_NAME} [moodle] section:"
+echo "  - Set 'enable_email_notification = true'"
+echo "  - Set 'notification_email_address = your.email@example.com'"
+print_warning "Ensure your Moodle outgoing mail settings are configured correctly."
+echo ""
+print_warning "If using Fail2ban blocking, ensure iptables is functioning correctly on your server."
 echo ""
 print_info "CHECK LOGS:"
 echo "  - Script execution log: ${APP_DIR}/${LOG_FILE_NAME}"
 echo "  - Cron execution log: ${APP_DIR}/${CRON_LOG_NAME}"
 echo "  - Fail2ban log: /var/log/fail2ban.log (for general activity)"
-echo "  - Log monitored by Fail2ban: ${FAIL2BAN_LOG_PATH}"
+echo "  - Log monitored by Fail2ban: ${FAIL2BAN_LOG_PATH} (Only if enable_fail2ban_blocking=true)"
 echo ""
-print_info "The cron job is set to run every minute. Blocking should start occurring."
-print_info "Check Moodle's IP Blocker page to verify IPs are being added."
+print_info "The cron job is set to run every minute. Blocking should start occurring based on config."
 print_info "---------------------------------------------------------------------"
 
 exit 0
