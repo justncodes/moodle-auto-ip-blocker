@@ -75,7 +75,7 @@ Add IP to Moodle 'blockedip' list and optionally send notification.
 
 Options:
   --ip=IP_ADDRESS        The IP address to block. (Required)
-  --notify-email=EMAIL   Email address to send notification to.
+  --notify-email=EMAILS  Comma-separated list of email addresses to notify.
   -h, --help             Show this help message.
 EOT;
     echo $help;
@@ -83,14 +83,28 @@ EOT;
 }
 
 $ip_to_block = trim($options['ip']);
-$notify_email = isset($options['notify-email']) ? trim($options['notify-email']) : '';
+$notify_email_string = isset($options['notify-email']) ? trim($options['notify-email']) : '';
 
 
 if (!filter_var($ip_to_block, FILTER_VALIDATE_IP)) { cli_error("Invalid IP address format: '{$ip_to_block}'"); exit(1); }
-if (!empty($notify_email) && !filter_var($notify_email, FILTER_VALIDATE_EMAIL)) {
-     cli_writeln("WARNING: Invalid --notify-email format: '{$notify_email}'. Notification will be skipped.");
-     $notify_email = '';
+
+// --- Split and validate emails ---
+$valid_recipient_emails = [];
+if (!empty($notify_email_string)) {
+    $email_candidates = explode(',', $notify_email_string);
+    foreach ($email_candidates as $email_candidate) {
+        $trimmed_email = trim($email_candidate);
+        if (filter_var($trimmed_email, FILTER_VALIDATE_EMAIL)) {
+            $valid_recipient_emails[] = $trimmed_email;
+        } else if (!empty($trimmed_email)) {
+            cli_writeln("WARNING: Invalid email format in list: '{$trimmed_email}'. Skipping this address.");
+        }
+    }
 }
+if (empty($valid_recipient_emails) && !empty($notify_email_string)) {
+     cli_writeln("WARNING: No valid email addresses found in --notify-email list. Notification will be skipped.");
+}
+
 
 // --- Main Logic ---
 cli_heading("Moodle IP Blocker CLI ('blockedip')");
@@ -126,8 +140,10 @@ if ($set_config_result === true) {
         cli_writeln("WARNING: Cache purge failed: " . $e->getMessage());
     }
 
-    if (!empty($notify_email)) {
-        cli_writeln("Attempting notification to {$notify_email} via PHPMailer...");
+    if (!empty($valid_recipient_emails)) {
+        cli_writeln("Attempting notification to " . count($valid_recipient_emails) . " recipient(s) via PHPMailer...");
+        cli_writeln("Recipients: " . implode(', ', $valid_recipient_emails));
+
 
         if (empty($CFG->noreplyaddress)) {
              cli_writeln("WARNING: Moodle 'noreplyaddress' not set. Using default 'noreply@hostname'.");
@@ -169,16 +185,17 @@ if ($set_config_result === true) {
                  ];
             }
 
-            // Recipients
+            // Recipients - Loop through validated list
             $fromname = get_config('moodle', 'sitename') ?: 'Moodle System';
             $mail->setFrom($fromaddress, $fromname);
-            $mail->addAddress($notify_email);
+            foreach ($valid_recipient_emails as $recipient_email) {
+                 $mail->addAddress($recipient_email);
+            }
 
             // Content
-            $mail->isHTML(false); // Send as plain text
+            $mail->isHTML(false);
             $sitename = get_config('moodle', 'sitename') ?: 'Moodle Site';
             $mail->Subject = $sitename . ' :: Banned IP notification';
-
             $ipblocker_url = rtrim($CFG->wwwroot, '/') . '/admin/settings.php?section=ipblocker';
             $mail->Body    = "IP address automatically added to Moodle block list:\n\n"
                            . "IP Address: {$ip_to_block}\n\n"
@@ -188,7 +205,7 @@ if ($set_config_result === true) {
             $mail->CharSet = 'UTF-8';
 
             $mail->send();
-            cli_writeln("Successfully sent notification email via PHPMailer.");
+            cli_writeln("Successfully sent notification email via PHPMailer to listed recipients.");
 
         } catch (PHPMailerException $e) {
             cli_error("PHPMailer failed to send email: {$mail->ErrorInfo}");
@@ -196,7 +213,7 @@ if ($set_config_result === true) {
             cli_error("PHP Error/Exception during email sending process: " . $e->getMessage());
             cli_error("File: " . $e->getFile() . " Line: " . $e->getLine());
         }
-    } else { cli_writeln("Email notification skipped."); }
+    } else { cli_writeln("Email notification skipped (no valid recipients specified)."); }
 
     exit(0);
 

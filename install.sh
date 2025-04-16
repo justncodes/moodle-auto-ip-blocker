@@ -173,7 +173,8 @@ cli_script_path = ${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}
 # Enable email notifications for Moodle blocks (requires address below)
 enable_email_notification = false
 
-# Email address of an existing Moodle user to send notifications to (must be set if above is true)
+# Comma-separated list of email addresses (belonging to Moodle users)
+# to send notifications to (must be set if above is true)
 notification_email_address =
 
 [fail2ban]
@@ -225,7 +226,7 @@ chown root:root "${VENV_DIR}" -R
 chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
 chmod 600 "${APP_DIR}/${CONFIG_NAME}"
 chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
-chown root:adm "${FAIL2BAN_LOG_PATH}" || { print_warning "Failed setting group 'adm' for ${FAIL2BAN_LOG_PATH}, using root:root. Check file access for fail2ban."; chown root:root "${FAIL2BAN_LOG_PATH}"; }
+chown root:adm "${FAIL2BAN_LOG_PATH}" || { print_warning "Failed setting group 'adm' for ${FAIL2BAN_LOG_PATH}, using root:root."; chown root:root "${FAIL2BAN_LOG_PATH}"; }
 chmod 640 "${FAIL2BAN_LOG_PATH}"
 print_info "Permissions set."
 
@@ -307,10 +308,10 @@ print_warning "Review ${APP_DIR}/${CONFIG_NAME} to configure:"
 echo "  - [actions] enable_moodle_ip_blocking = true    (Default: Moodle internal blocking ENABLED)"
 echo "  - [actions] enable_fail2ban_blocking = false  (Default: Fail2ban firewall blocking DISABLED)"
 echo "  - [moodle] enable_email_notification = false  (Default: Email DISABLED)"
-echo "  - [moodle] notification_email_address =      (Default: No recipient)"
+echo "  - [moodle] notification_email_address =      (Default: No recipient. Use comma-separated list for multiple emails)"
 print_warning "To enable Fail2ban, set enable_fail2ban_blocking=true and ensure iptables works."
-print_warning "To enable email, set enable_email_notification=true, provide a valid Moodle user's email"
-print_warning "in notification_email_address, and ensure Moodle mail is configured."
+print_warning "To enable email, set enable_email_notification=true, provide a comma-separated list of valid"
+print_warning "Moodle users' email addresses in notification_email_address, and ensure Moodle mail is configured."
 echo ""
 print_info "CHECK LOGS:"
 echo "  - Script Log:      ${APP_DIR}/${LOG_FILE_NAME}"

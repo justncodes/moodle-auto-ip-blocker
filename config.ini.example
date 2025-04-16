@@ -25,10 +25,11 @@ web_server_user = www-data
 # Relative path within Moodle dir to the CLI script
 cli_script_path = local/customscripts/cli/block_ip.php
 
-# Enable email notifications for Moodle IP blocks (requires address below)
+# Enable email notifications for Moodle blocks (requires address below)
 enable_email_notification = false
 
-# Email address to send Moodle block notifications to (must be set if above is true)
+# Comma-separated list of email addresses (belonging to Moodle users)
+# to send notifications to (must be set if above is true)
 notification_email_address =
 
 [fail2ban]
@@ -40,4 +41,5 @@ log_path = /var/log/moodle_failed_logins.log
 enable_moodle_ip_blocking = true
 
 # Set to true to block IPs using Fail2ban and firewall rules (e.g., iptables)
-enable_fail2ban_blocking = true
+# Default is false as Moodle IP blocking is generally preferred.
+enable_fail2ban_blocking = false
