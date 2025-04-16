@@ -236,22 +236,49 @@ if __name__ == "__main__":
             'database': db_name,
             'connection_timeout': 10
         }
+        default_socket_path = '/run/mysqld/mysqld.sock'
+        use_socket = False
 
-        if db_host.lower() != 'localhost' and db_host != '127.0.0.1':
-            logger.info(f"Connecting to remote host {db_host}:{db_port} via TCP/IP.")
-            connection_args['host'] = db_host
-            connection_args['port'] = db_port
+        if db_host.lower() == 'localhost' or db_host == '127.0.0.1':
+            if os.path.exists(default_socket_path):
+                 logger.info(f"Host is local and socket '{default_socket_path}' exists. Attempting connection via socket.")
+                 connection_args['unix_socket'] = default_socket_path
+                 use_socket = True
+            else:
+                 logger.warning(f"Host is local but default socket '{default_socket_path}' not found. Will attempt TCP/IP to {db_host}:{db_port}.")
+                 connection_args['host'] = db_host
+                 connection_args['port'] = db_port
+                 use_socket = False
         else:
-            logger.info(f"Connecting to local database (host='{db_host}'). Omitting host/port to allow default socket connection.")
+             logger.info(f"Host '{db_host}' is not local. Attempting TCP/IP connection.")
+             connection_args['host'] = db_host
+             connection_args['port'] = db_port
+             use_socket = False
 
         try:
             logger.debug(f"Attempting connection with args: {connection_args}")
             cnx = mysql.connector.connect(**connection_args)
             cursor = cnx.cursor(dictionary=True)
-            logger.info("Database connection successful.")
+            logger.info(f"Database connection successful {'via socket' if use_socket else 'via TCP/IP'}.")
         except mysql.connector.Error as err:
-            logger.error(f"Database connection failed: {err}", exc_info=True)
-            raise err
+            # If we TRIED the socket and it failed, attempt TCP fallback
+            if use_socket:
+                logger.warning(f"Socket connection failed ({err}). Retrying via TCP/IP to {db_host}:{db_port}...")
+                del connection_args['unix_socket']
+                connection_args['host'] = db_host
+                connection_args['port'] = db_port
+                try:
+                    logger.debug(f"Retrying connection with TCP args: {connection_args}")
+                    cnx = mysql.connector.connect(**connection_args)
+                    cursor = cnx.cursor(dictionary=True)
+                    logger.info("Database connection successful via TCP/IP fallback.")
+                except mysql.connector.Error as err_tcp:
+                    logger.error(f"TCP/IP fallback connection also failed: {err_tcp}", exc_info=True)
+                    raise err_tcp
+            else:
+                logger.error(f"Database connection failed: {err}", exc_info=True)
+                raise err
+
 
         # Query for new failed logins
         log_table = f"{db_table_prefix}logstore_standard_log"
