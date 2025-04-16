@@ -2,8 +2,8 @@
 // This script is designed to be run from the command line.
 
 define('CLI_SCRIPT', true);
-error_reporting(E_ALL & ~E_DEPRECATED); // Suppressing deprecation notices
-// ini_set('display_errors', 'stderr'); // Disables direct error display if needed
+error_reporting(E_ALL & ~E_DEPRECATED);
+// ini_set('display_errors', 'stderr');
 
 // --- Setup ---
 $scriptpath = dirname(__FILE__);
@@ -144,7 +144,6 @@ if ($set_config_result === true) {
         cli_writeln("Attempting notification to " . count($valid_recipient_emails) . " recipient(s) via PHPMailer...");
         cli_writeln("Recipients: " . implode(', ', $valid_recipient_emails));
 
-
         if (empty($CFG->noreplyaddress)) {
              cli_writeln("WARNING: Moodle 'noreplyaddress' not set. Using default 'noreply@hostname'.");
              $hostname = php_uname('n');
@@ -157,35 +156,23 @@ if ($set_config_result === true) {
 
         try {
             // Server settings
-            if (empty($CFG->smtphosts)) {
-                 $mail->isMail();
-            } else {
+            if (empty($CFG->smtphosts)) { $mail->isMail(); }
+            else {
                  $mail->isSMTP();
                  $mail->Host = $CFG->smtphosts;
                 if (!empty($CFG->smtpuser)) {
                     $mail->SMTPAuth = true;
                     $mail->Username = $CFG->smtpuser;
                     $mail->Password = isset($CFG->smtppass) ? $CFG->smtppass : '';
-                    if (empty($mail->Password) && $mail->SMTPAuth) {
-                         cli_writeln("WARNING: smtpuser set but smtppass is empty or not found in \$CFG.");
-                    }
-                } else {
-                    $mail->SMTPAuth = false;
-                }
+                    if (empty($mail->Password) && $mail->SMTPAuth) { cli_writeln("WARNING: smtpuser set but smtppass is empty or not found in \$CFG."); }
+                } else { $mail->SMTPAuth = false; }
                 if (!empty($CFG->smtpsecure)) { $mail->SMTPSecure = strtolower($CFG->smtpsecure); }
                 else { $mail->SMTPSecure = ''; }
                 if (!empty($CFG->smtpport)) { $mail->Port = (int)$CFG->smtpport; }
-
-                 $mail->SMTPOptions = [
-                     'ssl' => [
-                         'verify_peer' => false,
-                         'verify_peer_name' => false,
-                         'allow_self_signed' => true
-                     ]
-                 ];
+                $mail->SMTPOptions = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
             }
 
-            // Recipients - Loop through validated list
+            // Recipients
             $fromname = get_config('moodle', 'sitename') ?: 'Moodle System';
             $mail->setFrom($fromaddress, $fromname);
             foreach ($valid_recipient_emails as $recipient_email) {
