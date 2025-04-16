@@ -110,7 +110,12 @@ def get_moodle_db_password(config):
         logger.error(f"Failed to retrieve Moodle DB password: {e}", exc_info=True)
         raise
 
-def call_moodle_cli(config, ip_address):
+def call_moodle_cli_bulk(config, ip_list):
+    """Calls the Moodle CLI script to block a list of IPs."""
+    if not ip_list:
+        logger.info("No IPs provided for bulk Moodle block.")
+        return True
+
     try:
         php_bin = config.get('moodle', 'php_executable')
         moodle_root = config.get('moodle', 'wwwroot')
@@ -124,7 +129,11 @@ def call_moodle_cli(config, ip_address):
              logger.error(f"Moodle CLI script not found: {cli_script_full_path}")
              return False
 
-        command = ['sudo', '-u', web_user, php_bin, cli_script_full_path, f'--ip={ip_address}']
+        # Join the list of IPs into a comma-separated string
+        ips_string = ",".join(ip_list)
+
+        # Construct command with --ips argument
+        command = ['sudo', '-u', web_user, php_bin, cli_script_full_path, f'--ips={ips_string}'] # Use --ips
         cli_log_extra = ""
         if send_email and notify_email_addr_str:
             command.append(f'--notify-email={notify_email_addr_str}')
@@ -134,18 +143,18 @@ def call_moodle_cli(config, ip_address):
             logger.warning(f"Email notification enabled but 'notification_email_address' empty.")
         else: logger.debug(f"Email notification disabled.")
 
-        logger.info(f"Attempting Moodle IP block for {ip_address}{cli_log_extra}.")
+        logger.info(f"Attempting Moodle IP block for {len(ip_list)} IPs: {ips_string}{cli_log_extra}.")
         logger.debug(f"Executing command: {' '.join(command)}")
         result = subprocess.run(command, capture_output=True, text=True, check=False, encoding='utf-8')
 
         if result.returncode == 0:
-            logger.info(f"Successfully requested Moodle IP block for {ip_address}.")
+            logger.info(f"Successfully requested Moodle IP block for the list of IPs.")
             logger.debug(f"Moodle CLI stdout:\n{result.stdout}")
-            if send_email and notify_email_addr_str and "Successfully sent notification email" not in result.stdout:
-                 logger.warning(f"Moodle CLI success, but email confirmation message missing.")
+            if send_email and notify_email_addr_str and "Successfully sent notification email" not in result.stdout and "Email notification skipped" not in result.stdout :
+                 logger.warning(f"Moodle CLI success, but email confirmation/skip message missing.")
             return True
         else:
-            logger.error(f"Moodle IP block failed for {ip_address}. RC: {result.returncode}")
+            logger.error(f"Moodle IP block failed for the list of IPs. RC: {result.returncode}")
             logger.error(f"Moodle CLI stderr:\n{result.stderr}")
             logger.error(f"Moodle CLI stdout:\n{result.stdout}")
             return False
@@ -153,8 +162,9 @@ def call_moodle_cli(config, ip_address):
         logger.error(f"Config error reading Moodle CLI settings: {e}", exc_info=True)
         return False
     except Exception as e:
-        logger.error(f"Error executing Moodle CLI for {ip_address}.", exc_info=True)
+        logger.error(f"Error executing Moodle CLI for bulk IPs.", exc_info=True)
         return False
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -229,7 +239,6 @@ if __name__ == "__main__":
         new_max_id = last_processed_id
         ip_failures = {}
 
-        # Base connection arguments
         connection_args = {
             'user': db_user,
             'password': db_password,
@@ -237,33 +246,30 @@ if __name__ == "__main__":
             'connection_timeout': 10
         }
         default_socket_path = '/run/mysqld/mysqld.sock'
-        use_socket = False
+        use_socket_initially = False
 
         if db_host.lower() == 'localhost' or db_host == '127.0.0.1':
             if os.path.exists(default_socket_path):
-                 logger.info(f"Host is local and socket '{default_socket_path}' exists. Attempting connection via socket.")
+                 logger.info(f"Host is local and socket '{default_socket_path}' exists. Will attempt socket first.")
                  connection_args['unix_socket'] = default_socket_path
-                 use_socket = True
+                 use_socket_initially = True
             else:
-                 logger.warning(f"Host is local but default socket '{default_socket_path}' not found. Will attempt TCP/IP to {db_host}:{db_port}.")
+                 logger.warning(f"Host local but socket '{default_socket_path}' not found. Using TCP/IP.")
                  connection_args['host'] = db_host
                  connection_args['port'] = db_port
-                 use_socket = False
         else:
-             logger.info(f"Host '{db_host}' is not local. Attempting TCP/IP connection.")
+             logger.info(f"Host '{db_host}' is not local. Using TCP/IP.")
              connection_args['host'] = db_host
              connection_args['port'] = db_port
-             use_socket = False
 
         try:
             logger.debug(f"Attempting connection with args: {connection_args}")
             cnx = mysql.connector.connect(**connection_args)
             cursor = cnx.cursor(dictionary=True)
-            logger.info(f"Database connection successful {'via socket' if use_socket else 'via TCP/IP'}.")
+            logger.info(f"DB connection successful {'via socket' if use_socket_initially and 'unix_socket' in connection_args else 'via TCP/IP'}.")
         except mysql.connector.Error as err:
-            # If we TRIED the socket and it failed, attempt TCP fallback
-            if use_socket:
-                logger.warning(f"Socket connection failed ({err}). Retrying via TCP/IP to {db_host}:{db_port}...")
+            if use_socket_initially:
+                logger.warning(f"Socket connection failed ({err}). Retrying via TCP/IP...")
                 del connection_args['unix_socket']
                 connection_args['host'] = db_host
                 connection_args['port'] = db_port
@@ -271,14 +277,13 @@ if __name__ == "__main__":
                     logger.debug(f"Retrying connection with TCP args: {connection_args}")
                     cnx = mysql.connector.connect(**connection_args)
                     cursor = cnx.cursor(dictionary=True)
-                    logger.info("Database connection successful via TCP/IP fallback.")
+                    logger.info("DB connection successful via TCP/IP fallback.")
                 except mysql.connector.Error as err_tcp:
-                    logger.error(f"TCP/IP fallback connection also failed: {err_tcp}", exc_info=True)
+                    logger.error(f"TCP/IP fallback failed: {err_tcp}", exc_info=True)
                     raise err_tcp
             else:
-                logger.error(f"Database connection failed: {err}", exc_info=True)
+                logger.error(f"DB connection failed: {err}", exc_info=True)
                 raise err
-
 
         # Query for new failed logins
         log_table = f"{db_table_prefix}logstore_standard_log"
@@ -302,33 +307,36 @@ if __name__ == "__main__":
 
         logger.info(f"Processed {processed_count} new failed login events. Max ID: {new_max_id}")
 
-        # Check thresholds and trigger actions
-        processed_ips_this_run = set()
+        # Identify IPs exceeding threshold
+        ips_to_block_moodle = []
+        ips_to_block_fail2ban = []
+
         for ip, count in ip_failures.items():
             if count >= failure_threshold:
-                if ip not in processed_ips_this_run:
-                    logger.warning(f"IP {ip} exceeded threshold ({count} failures).")
-                    action_taken_f2b = False
-                    action_taken_moodle = False
+                logger.warning(f"IP {ip} exceeded threshold ({count} failures).")
+                if enable_moodle_blocking_action:
+                    ips_to_block_moodle.append(ip)
+                if enable_fail2ban_blocking_action:
+                    ips_to_block_fail2ban.append(ip)
 
-                    if enable_fail2ban_blocking_action and fail2ban_handler:
-                        try:
-                            logger.info(f"Logging IP {ip} for Fail2ban.")
-                            fail2ban_logger.info(ip)
-                            action_taken_f2b = True
-                        except Exception as e: logger.error(f"Failed writing IP {ip} to F2B log.", exc_info=True)
+        # Action 1: Log for Fail2ban
+        if ips_to_block_fail2ban and fail2ban_handler:
+            logger.info(f"Logging {len(ips_to_block_fail2ban)} IPs for Fail2ban...")
+            for ip in ips_to_block_fail2ban:
+                try:
+                    fail2ban_logger.info(ip)
+                except Exception as e:
+                     logger.error(f"Failed writing IP {ip} to F2B log.", exc_info=True)
+            logger.info("Finished logging IPs for Fail2ban.")
+        elif ips_to_block_fail2ban:
+             logger.warning("Identified IPs for Fail2ban but handler not available.")
 
-                    if enable_moodle_blocking_action:
-                        if call_moodle_cli(config, ip): action_taken_moodle = True
-                        else: logger.error(f"Moodle IP block action failed for {ip}.")
-
-                    if action_taken_f2b or action_taken_moodle: processed_ips_this_run.add(ip)
-                    elif not enable_fail2ban_blocking_action and not enable_moodle_blocking_action: logger.warning(f"IP {ip} met threshold but no actions enabled.")
-                    else: logger.warning(f"IP {ip} met threshold but all enabled actions failed.")
-                else: logger.debug(f"IP {ip} already processed.")
-
-        if processed_count > 0 and not ip_failures: logger.info("Processed logs, no IPs reached threshold.")
-        elif not processed_count: logger.info("No new failed login events found.")
+        # Action 2: Block via Moodle CLI
+        if ips_to_block_moodle:
+            if not call_moodle_cli_bulk(config, ips_to_block_moodle):
+                logger.error("Bulk Moodle IP block action failed. See errors above.")
+        elif enable_moodle_blocking_action:
+             logger.info("No IPs met threshold for Moodle blocking in this run.")
 
 
     except mysql.connector.Error as err:
@@ -347,6 +355,7 @@ if __name__ == "__main__":
         end_time = datetime.now()
         duration = end_time - start_time
 
+        # Close resources
         if cursor:
             try: cursor.close(); logger.debug("DB cursor closed.")
             except Exception as e: logger.warning(f"Error closing cursor: {e}")
@@ -357,6 +366,7 @@ if __name__ == "__main__":
             try: fail2ban_logger.removeHandler(fail2ban_handler); fail2ban_handler.close(); logger.debug("F2B handler closed.")
             except Exception as e: logger.warning(f"Error closing F2B handler: {e}")
 
+        # Update state file only on success
         if exit_code == 0:
             if 'new_max_id' in locals() and 'last_processed_id' in locals():
                  if new_max_id > last_processed_id:
