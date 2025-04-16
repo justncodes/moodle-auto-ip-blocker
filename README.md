@@ -1,6 +1,6 @@
 # Moodle Auto IP Blocker
 
-This project provides a mechanism to automatically block IP addresses that generate excessive failed login attempts on a Moodle site within a certain amount of time. It uses a Python script to monitor Moodle logs and can trigger blocking via **Moodle's internal IP blocker** (recommended, enabled by default) and/or **Fail2ban** for firewall-level blocking (optional, disabled by default). Email notifications can also be configured.
+This project provides a mechanism to automatically block IP addresses that generate excessive failed login attempts on a Moodle site within a certain amount of time. It uses a Python script to monitor Moodle logs and can trigger blocking via **Moodle's internal IP blocker** (recommended, enabled by default) and/or **Fail2ban** for firewall-level blocking (optional, disabled by default). Email notifications to one or more Moodle administrators can also be configured.
 
 ## Goal
 
@@ -19,10 +19,10 @@ Publicly accessible Moodle sites often face brute-force login attempts. Moodle's
 *   **Database Log Monitoring:** Directly queries the Moodle log store (`mdl_logstore_standard_log`).
 *   **IP-Based Threshold:** Counts failures per IP address across script runs.
 *   **Configurable Blocking Methods:** Independently enable/disable Moodle internal blocking and/or Fail2ban firewall blocking via `config.ini`.
-*   **Email Notifications:** Optionally send an email (using Moodle's mail system) to a specified address when an IP is added to the Moodle block list.
+*   **Email Notifications:** Optionally send an email (using Moodle's mail system) to one or more specified email addresses when an IP is added to the Moodle block list. Includes a direct link to the IP Blocker page.
 *   **Secure Password Handling:** Database password is *not* stored in the script's config file; it's read directly from Moodle's `config.php` at runtime.
-*   **Automated Installation:** Provides an `install.sh` script for easy setup on Debian-based systems (installs dependencies including `fail2ban` and `iptables`).
-*   **Automatic Configuration:** Attempts to read Moodle database credentials (excluding password) and paths from `config.php`.
+*   **Automated Installation:** Provides an `install.sh` script for easy setup on Debian-based systems, installing dependencies and the project scripts. Re-running the installer updates the scripts.
+*   **Automatic Configuration:** Attempts to read Moodle database credentials (excluding password) and paths from `config.php` during initial setup.
 *   **Python Virtual Environment:** Installs Python dependencies in an isolated `venv`.
 *   **Log Rotation:** The main Python script log (`moodle_ip_blocker.log`) uses automatic log rotation.
 
@@ -34,14 +34,14 @@ Publicly accessible Moodle sites often face brute-force login attempts. Moodle's
 *   **PHP CLI:** The **correct** PHP Command Line Interface executable matching the version used by your Moodle web server must be installed and accessible in the system `PATH`. Necessary PHP extensions must be enabled for this CLI version.
 *   **Python:** Python 3, Pip, and Venv (installed by the script).
 *   **Fail2ban & iptables:** The Fail2ban service and `iptables` command/package (installed by the script). Only actively used if `enable_fail2ban_blocking = true` in `config.ini`.
-*   **Database Access:** The script needs credentials (read directly from Moodle's `config.php`) to connect to your Moodle database. The Moodle DB user needs `SELECT` permissions on `mdl_logstore_standard_log` and `UPDATE` permissions on `mdl_config`, which it should already have.
+*   **Database Access:** The script needs credentials (read directly from Moodle's `config.php`) to connect to your Moodle database. The Moodle DB user needs `SELECT` permissions on `mdl_logstore_standard_log` and `UPDATE` permissions on `mdl_config` (standard Moodle permissions usually suffice).
 *   **Web Server User:** You need to know the user your web server (Apache/Nginx) runs as (e.g., `www-data`, `daemon`).
 *   **(Optional) Moodle Mail Configuration:** Required if enabling email notifications. The system needs to be able to send emails via the settings under `Site administration > Server > Email > Outgoing mail configuration`.
-*   **(Optional) Moodle User Account:** If enabling email notifications, the recipient email address must belong to an active Moodle user account.
+*   **(Optional) Valid Recipient Emails:** If enabling email notifications, the recipient email addresses listed in the config should be valid.
 
 ## Installation
 
-The installation is automated via the `install.sh` script. It downloads and installs all dependencies by default, as well as the python and php files from this github site.
+The installation is automated via the `install.sh` script. It downloads and installs all dependencies by default, as well as the Python and PHP files from this GitHub repository. Re-running the script will update the Python and PHP files to the latest versions from the repository.
 
 **WARNING:** Always inspect scripts downloaded from the internet before executing them with `sudo`. This script installs packages, creates files, modifies system configurations (Fail2ban, Cron), and requires root privileges.
 
@@ -54,15 +54,15 @@ The installation is automated via the `install.sh` script. It downloads and inst
     curl -fsSL https://raw.githubusercontent.com/justncodes/moodle-auto-ip-blocker/refs/heads/master/install.sh | sudo bash
     ```
 3.  **Review Output:** The script automatically detects Moodle path, PHP path, and web server user. It verifies the user exists. Any errors will stop the script.
-4.  **Post-Installation Verification (CRITICAL):** After the script finishes, carefully review the final output messages and verify settings in `/opt/moodle-blocker/config.ini`:
+4.  **Post-Installation / Verification (CRITICAL):** After the script finishes, carefully review the final output messages and verify settings in `/opt/moodle-blocker/config.ini`:
     *   **Verify PHP Path (`php_executable`):** Ensure this matches the version your Moodle web server uses. If not, update manually.
-    *   **Verify Web User (`web_server_user`):** Ensure this is correct. If not, update manually AND correct the group ownership of the CLI script (`sudo chown root:CORRECT_USER /path/to/moodle/local/customscripts/cli/block_ip.php`).
+    *   **Verify Web User (`web_server_user`):** Ensure this is correct. If not, update manually AND correct the group ownership of the CLI script (`sudo chown root:CORRECT_USER /var/www/html/moodle/local/customscripts/cli/block_ip.php`).
     *   **Review Blocking Options (`[actions]` section):**
         *   `enable_moodle_ip_blocking` defaults to `true` (recommended).
         *   `enable_fail2ban_blocking` defaults to `false`. Set to `true` if you want firewall-level blocking via Fail2ban/iptables.
     *   **Configure Email Notifications (`[moodle]` section):**
         *   Set `enable_email_notification = true`.
-        *   Set `notification_email_address` to the email address of an *existing Moodle user* who should receive the alerts.
+        *   Set `notification_email_address` to a comma-separated list of email addresses that should receive the alerts (e.g., `admin1@example.com,admin2@example.com`).
         *   Ensure Moodle's mail system is configured and working.
 
 ## Configuration (`/opt/moodle-blocker/config.ini`)
@@ -94,10 +94,11 @@ web_server_user = www-data
 # Relative path within Moodle dir to the CLI script
 cli_script_path = local/customscripts/cli/block_ip.php
 
-# Enable email notifications for Moodle blocks (requires address below)
+# Enable email notifications for Moodle blocks (requires address(es) below)
 enable_email_notification = false
 
-# Email address of an existing Moodle user to send notifications to (must be set if above is true)
+# Comma-separated list of email addresses to send notifications to
+# (must be set if above is true)
 notification_email_address =
 
 [fail2ban]
@@ -129,15 +130,16 @@ Fail2ban configuration files are still created but only used if `enable_fail2ban
     *   Counts failures per IP.
     *   If an IP exceeds `failure_threshold`:
         *   **If `enable_fail2ban_blocking = true`:** Logs the IP to `/var/log/moodle_failed_logins.log`.
-        *   **If `enable_moodle_ip_blocking = true`:** Calls the Moodle CLI script (`block_ip.php`) via `sudo -u <web_user>`, passing the IP and notification email (if configured).
+        *   **If `enable_moodle_ip_blocking = true`:** Calls the Moodle CLI script (`block_ip.php`) via `sudo -u <web_user>`, passing the IP and the comma-separated notification email string (if configured).
     *   Updates the last processed ID in `moodle_blocker_state.dat`.
     *   Logs its own activity to `/opt/moodle-blocker/moodle_ip_blocker.log`.
 3.  **Moodle CLI Script (`block_ip.php`):**
     *   Executed as the web server user *only if* called by the Python script (`enable_moodle_ip_blocking = true`).
     *   Uses Moodle `adminlib` functions (`get_config`, `set_config`) to append the IP to the `blockedip` setting in `mdl_config`.
     *   Attempts to purge the core config cache.
-    *   If a notification email address was passed and belongs to a valid Moodle user:
-        *   Uses Moodle's core mailing mechanism (direct PHPMailer configured via `$CFG`) to send a notification email.
+    *   If a notification email string was passed:
+        *   Splits the string into individual email addresses and validates them.
+        *   Uses Moodle's bundled PHPMailer library, configured via `$CFG` settings (SMTP or PHP mail()), to send a notification email to all valid recipient addresses.
         *   The email includes details and a direct link to Moodle's IP Blocker page.
 4.  **Fail2ban:**
     *   *Only if* `enable_fail2ban_blocking = true` in `config.ini`:
@@ -171,19 +173,19 @@ Fail2ban configuration files are still created but only used if `enable_fail2ban
     *   Check `moodle_ip_blocker.log` for errors calling the Moodle CLI script (e.g., \"Moodle IP block failed...\"). Examine `stderr` and `stdout` printed in the log.
     *   Check Moodle DB user permissions (`UPDATE` on `mdl_config`).
     *   Test `block_ip.php` manually (see previous logs for command).
-    *   Purge Moodle caches.
+    *   Purge Moodle caches (`Site administration > Development > Purge caches`).
 *   **Email Notifications Not Sent:**
-    *   Verify `enable_email_notification = true` and `notification_email_address` (must be a Moodle user's email) are set in `config.ini`.
+    *   Verify `enable_email_notification = true` and `notification_email_address` are set in `config.ini`. Ensure addresses are comma-separated if multiple.
     *   Check `moodle_ip_blocker.log` for errors related to the Moodle CLI call.
-    *   Run `block_ip.php` manually and check its output for specific mail errors (e.g., \"PHPMailer failed...\", \"Could not find active Moodle user...\").
-    *   Verify Moodle's outgoing mail configuration (`Site administration > Server > Email > Outgoing mail configuration`) and ensure Moodle can send *any* email.
-    *   Check system mail logs (`/var/log/mail.log`, `/var/log/maillog`) or web server error logs for lower-level mail delivery issues.
-    *   Note the script disables SMTP SSL certificate verification by default (`SMTPOptions` in `block_ip.php`) which might be needed for internal relays but is less secure for external servers.
+    *   Run `block_ip.php` manually and check its output for specific mail errors (e.g., \"PHPMailer failed...\", \"WARNING: Invalid email format...\").
+    *   Verify Moodle's outgoing mail configuration (`Site administration > Server > Email > Outgoing mail configuration`) and ensure Moodle can send *any* email from the web interface.
+    *   Check system mail logs (`/var/log/mail.log`, `/var/log/maillog`) or web server error logs for lower-level mail delivery issues (e.g., SMTP connection errors, authentication failures).
+    *   Note the script disables SMTP SSL certificate verification by default (`SMTPOptions` in `block_ip.php`) which might be needed for internal relays but is less secure for external servers. If your SMTP server requires valid certificates, you may need to comment out or adjust the `SMTPOptions` block in `block_ip.php`.
 *   **IPs Not Blocked by Firewall (Fail2ban/iptables):**
     *   Verify `enable_fail2ban_blocking = true` in `config.ini`.
     *   Check if IPs are written to `/var/log/moodle_failed_logins.log`.
-    *   Check `/var/log/fail2ban.log` for errors.
+    *   Check `/var/log/fail2ban.log` for errors related to the `moodle-custom` jail or `iptables` actions.
     *   Ensure `iptables` service is functional. Check `sudo iptables -L -n`.
     *   Check Fail2ban status: `sudo fail2ban-client status moodle-custom`.
 *   **DB Connection Errors (Python Script):** Check Moodle's `config.php` permissions (readable by root for password retrieval step). Verify DB host/user/name in `config.ini`. Ensure DB server is running and accessible.
-*   **PHP Deprecated Warnings:** These can generally be ignored. They relate to Moodle code using older PHP features and don't typically affect functionality. They will likely be addressed in future Moodle updates.
+*   **PHP Deprecated Warnings:** These can generally be ignored in the `block_ip.php` output. They relate to Moodle code using older PHP features and don't typically affect functionality.

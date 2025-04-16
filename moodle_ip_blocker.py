@@ -117,7 +117,7 @@ def call_moodle_cli(config, ip_address):
         cli_script = config.get('moodle', 'cli_script_path')
         web_user = config.get('moodle', 'web_server_user')
         send_email = config.getboolean('moodle', 'enable_email_notification', fallback=False)
-        notify_email_addr = config.get('moodle', 'notification_email_address', fallback='').strip()
+        notify_email_addr_str = config.get('moodle', 'notification_email_address', fallback='').strip()
         cli_script_full_path = os.path.join(moodle_root, cli_script)
 
         if not os.path.exists(cli_script_full_path):
@@ -126,11 +126,11 @@ def call_moodle_cli(config, ip_address):
 
         command = ['sudo', '-u', web_user, php_bin, cli_script_full_path, f'--ip={ip_address}']
         cli_log_extra = ""
-        if send_email and notify_email_addr:
-            command.append(f'--notify-email={notify_email_addr}')
-            cli_log_extra = f" (with notification to {notify_email_addr})"
+        if send_email and notify_email_addr_str:
+            command.append(f'--notify-email={notify_email_addr_str}')
+            cli_log_extra = f" (with notification(s))"
             logger.debug(f"Email notification enabled, adding --notify-email.")
-        elif send_email and not notify_email_addr:
+        elif send_email and not notify_email_addr_str:
             logger.warning(f"Email notification enabled but 'notification_email_address' empty.")
         else: logger.debug(f"Email notification disabled.")
 
@@ -141,8 +141,8 @@ def call_moodle_cli(config, ip_address):
         if result.returncode == 0:
             logger.info(f"Successfully requested Moodle IP block for {ip_address}.")
             logger.debug(f"Moodle CLI stdout:\n{result.stdout}")
-            if send_email and notify_email_addr and "Successfully sent notification" not in result.stdout:
-                 logger.warning(f"Moodle CLI success, but email confirmation missing.")
+            if send_email and notify_email_addr_str and "Successfully sent notification email" not in result.stdout:
+                 logger.warning(f"Moodle CLI success, but email confirmation message missing.")
             return True
         else:
             logger.error(f"Moodle IP block failed for {ip_address}. RC: {result.returncode}")
@@ -215,6 +215,7 @@ if __name__ == "__main__":
         db_name = config.get('database', 'name')
         db_table_prefix = config.get('database', 'table_prefix', fallback='mdl_')
         failure_threshold = config.getint('rules', 'failure_threshold', fallback=10)
+        db_port = config.getint('database', 'port', fallback=3306)
 
         # Get password from Moodle
         db_password = get_moodle_db_password(config)
@@ -228,12 +229,29 @@ if __name__ == "__main__":
         new_max_id = last_processed_id
         ip_failures = {}
 
-        logger.debug(f"Connecting to database {db_name} on {db_host} as {db_user}")
-        cnx = mysql.connector.connect(
-            user=db_user, password=db_password, host=db_host, database=db_name
-        )
-        cursor = cnx.cursor(dictionary=True)
-        logger.debug("Database connection successful.")
+        # Base connection arguments
+        connection_args = {
+            'user': db_user,
+            'password': db_password,
+            'database': db_name,
+            'connection_timeout': 10
+        }
+
+        if db_host.lower() != 'localhost' and db_host != '127.0.0.1':
+            logger.info(f"Connecting to remote host {db_host}:{db_port} via TCP/IP.")
+            connection_args['host'] = db_host
+            connection_args['port'] = db_port
+        else:
+            logger.info(f"Connecting to local database (host='{db_host}'). Omitting host/port to allow default socket connection.")
+
+        try:
+            logger.debug(f"Attempting connection with args: {connection_args}")
+            cnx = mysql.connector.connect(**connection_args)
+            cursor = cnx.cursor(dictionary=True)
+            logger.info("Database connection successful.")
+        except mysql.connector.Error as err:
+            logger.error(f"Database connection failed: {err}", exc_info=True)
+            raise err
 
         # Query for new failed logins
         log_table = f"{db_table_prefix}logstore_standard_log"
@@ -287,7 +305,6 @@ if __name__ == "__main__":
 
 
     except mysql.connector.Error as err:
-        logger.error(f"Database error: {err}", exc_info=True)
         new_max_id = last_processed_id; exit_code = 1
     except configparser.Error as e:
          logger.error(f"Configuration error: {e}", exc_info=True)

@@ -26,11 +26,11 @@ web_server_user = www-data
 cli_script_path = local/customscripts/cli/block_ip.php
 
 # Enable email notifications for Moodle blocks (requires address below)
-enable_email_notification = false
+enable_email_notification = true
 
 # Comma-separated list of email addresses (belonging to Moodle users)
 # to send notifications to (must be set if above is true)
-notification_email_address =
+notification_email_address = bob@example.com,sally@example.com
 
 [fail2ban]
 # Path Fail2ban will monitor
