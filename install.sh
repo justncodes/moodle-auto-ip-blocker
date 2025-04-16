@@ -44,20 +44,20 @@ check_root() { if [ "$(id -u)" -ne 0 ]; then print_error "This script must be ru
 check_root
 print_info "Starting Moodle Auto IP Blocker Setup..."
 
-# 1. Install Dependencies
+# Step 1: Install Dependencies
 print_info "Updating package lists..."
 apt-get update -y
 print_info "Installing dependencies (python3, python3-pip, python3-venv, fail2ban, cron, iptables)..."
 apt-get install -y python3 python3-pip python3-venv fail2ban cron iptables
 
-# 2. Create Application Directory and Virtual Environment
+# Step 2: Create Application Directory and Virtual Environment
 print_info "Creating application directory: ${APP_DIR}"
 mkdir -p "${APP_DIR}"
 cd "${APP_DIR}"
 print_info "Creating Python virtual environment in ${VENV_DIR}..."
 python3 -m venv "${VENV_DIR}"
 
-# 3. Install Python Dependencies
+# Step 3: Install Python Dependencies
 print_info "Activating virtual environment..."
 source "${VENV_DIR}/bin/activate"
 print_info "Installing mysql-connector-python into the virtual environment..."
@@ -65,7 +65,7 @@ pip install mysql-connector-python
 deactivate
 print_info "Deactivated virtual environment."
 
-# 4. Determine Moodle Directory Path
+# Step 4: Determine Moodle Directory Path
 DEFAULT_CONFIG_PATH="${DEFAULT_MOODLE_ROOT}/config.php"
 if [[ -f "$DEFAULT_CONFIG_PATH" ]]; then
     print_info "Found Moodle config at default location: ${DEFAULT_MOODLE_ROOT}"
@@ -77,7 +77,7 @@ else
 fi
 MOODLE_CONFIG_PATH="${MOODLE_ROOT}/config.php"
 
-# 5. Determine PHP Executable Path
+# Step 5: Determine PHP Executable Path
 print_info "Attempting to find PHP CLI executable using 'which php'..."
 PHP_EXEC=$(which php || echo "")
 if [[ -z "$PHP_EXEC" ]]; then
@@ -89,7 +89,7 @@ else
 fi
 if [[ ! -x "$PHP_EXEC" ]]; then print_error "PHP executable path '$PHP_EXEC' is not executable."; exit 1; fi
 
-# 6. Read Moodle config.php using PHP
+# Step 6: Read Moodle config.php using PHP
 print_info "Verifying PHP executable: $PHP_EXEC"; if [[ ! -x "$PHP_EXEC" ]]; then print_error "...failed."; exit 1; fi
 print_info "Verifying Moodle config readability: $MOODLE_CONFIG_PATH"; if [[ ! -r "$MOODLE_CONFIG_PATH" ]]; then print_error "...failed."; exit 1; fi
 PHP_TEMP_SCRIPT=$(mktemp --suffix=.php); trap 'echo "INFO: Cleaning up temp PHP script ${PHP_TEMP_SCRIPT}..."; rm -f "$PHP_TEMP_SCRIPT"' EXIT INT TERM
@@ -116,7 +116,7 @@ while IFS='=' read -r key value; do case "$key" in dbhost) DB_HOST="$value" ;; d
 if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PREFIX" ]]; then print_error "Could not extract DB variables."; exit 1; fi
 print_info "Successfully extracted Moodle DB config (excluding password)."
 
-# 7. Determine Web Server User
+# Step 7: Determine Web Server User
 print_info "Determining web server user..."
 DETECTED_WEB_USER=""
 if ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then DETECTED_WEB_USER="www-data"; print_info "Detected Apache/www-data.";
@@ -131,7 +131,7 @@ if ! id -u "$WEB_USER" > /dev/null 2>&1; then print_error "FATAL: User '${WEB_US
 else print_info "User '${WEB_USER}' confirmed.";
 fi
 
-# 8. Download Scripts
+# Step 8: Download Scripts
 print_info "Downloading Python script..."
 cd "${APP_DIR}"
 curl -fsSL "${PYTHON_SCRIPT_URL}" -o "${PYTHON_SCRIPT_NAME}"
@@ -139,7 +139,7 @@ chmod +x "${PYTHON_SCRIPT_NAME}"
 print_info "Downloading PHP CLI script..."
 curl -fsSL "${PHP_CLI_SCRIPT_URL}" -o "${PHP_CLI_SCRIPT_NAME}"
 
-# 9. Generate config.ini
+# Step 9: Generate config.ini
 print_info "Checking config file: ${APP_DIR}/${CONFIG_NAME}"
 if [[ ! -f "${APP_DIR}/${CONFIG_NAME}" ]]; then
     print_info "Generating configuration file: ${APP_DIR}/${CONFIG_NAME}"
@@ -195,7 +195,7 @@ else
     print_warning "Verify settings manually, especially [actions] and [moodle] email options."
 fi
 
-# 10. Place Moodle CLI Script
+# Step 10: Place Moodle CLI Script
 MOODLE_CLI_TARGET_DIR="${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}"
 MOODLE_CLI_FULL_PATH="${MOODLE_CLI_TARGET_DIR}/${PHP_CLI_SCRIPT_NAME}"
 print_info "Checking Moodle CLI script: ${MOODLE_CLI_FULL_PATH}"
@@ -212,7 +212,24 @@ else
     if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
 fi
 
-# 11. Configure Fail2ban (Files always created, functionality depends on config.ini)
+# Step 11: Create Log Files and Set Permissions
+print_info "Creating log/state files and setting permissions..."
+touch "${APP_DIR}/${LOG_FILE_NAME}" \
+      "${APP_DIR}/${CRON_LOG_NAME}" \
+      "${FAIL2BAN_LOG_PATH}" \
+      "${APP_DIR}/${STATE_FILE_NAME}" \
+      "${APP_DIR}/${CONFIG_NAME}"
+
+chown root:root "${APP_DIR}"; chmod 755 "${APP_DIR}"
+chown root:root "${VENV_DIR}" -R
+chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
+chmod 600 "${APP_DIR}/${CONFIG_NAME}"
+chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
+chown root:adm "${FAIL2BAN_LOG_PATH}" || { print_warning "Failed setting group 'adm' for ${FAIL2BAN_LOG_PATH}, using root:root. Check file access for fail2ban."; chown root:root "${FAIL2BAN_LOG_PATH}"; }
+chmod 640 "${FAIL2BAN_LOG_PATH}"
+print_info "Permissions set."
+
+# Step 12: Configure Fail2ban
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
@@ -248,7 +265,7 @@ print_info "Reloading Fail2ban configuration..."
 if ! command -v iptables &> /dev/null; then print_warning "iptables command not found."; fi
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
 
-# 12. Setup Cron Job
+# Step 13: Setup Cron Job
 CRON_FILE_PATH="/etc/cron.d/${CRON_FILE_NAME}"
 PYTHON_EXEC_VENV="${VENV_DIR}/bin/python3"
 print_info "Setting up cron job: ${CRON_FILE_PATH}"
@@ -260,22 +277,6 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 chmod 0644 "${CRON_FILE_PATH}"
 systemctl enable cron; systemctl restart cron
-
-# 13. Create Log Files and Set Permissions
-print_info "Creating log/state files and setting permissions..."
-touch "${APP_DIR}/${LOG_FILE_NAME}" \
-      "${APP_DIR}/${CRON_LOG_NAME}" \
-      "${FAIL2BAN_LOG_PATH}" \
-      "${APP_DIR}/${STATE_FILE_NAME}" \
-      "${APP_DIR}/${CONFIG_NAME}"
-
-chown root:root "${APP_DIR}"; chmod 755 "${APP_DIR}"
-chown root:root "${VENV_DIR}" -R
-chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
-chmod 600 "${APP_DIR}/${CONFIG_NAME}"
-chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
-chown root:adm "${FAIL2BAN_LOG_PATH}"; chmod 640 "${FAIL2BAN_LOG_PATH}"
-print_info "Permissions set."
 
 # --- Final Instructions ---
 echo ""
