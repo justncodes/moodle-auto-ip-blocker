@@ -57,7 +57,7 @@ cd "${APP_DIR}"
 print_info "Creating Python virtual environment in ${VENV_DIR}..."
 python3 -m venv "${VENV_DIR}"
 
-# 3. Install Python Dependencies into Virtual Environment
+# 3. Install Python Dependencies
 print_info "Activating virtual environment..."
 source "${VENV_DIR}/bin/activate"
 print_info "Installing mysql-connector-python into the virtual environment..."
@@ -83,68 +83,51 @@ PHP_EXEC=$(which php || echo "")
 if [[ -z "$PHP_EXEC" ]]; then
     print_warning "Could not find 'php' in PATH. Using fallback: ${DEFAULT_PHP_EXEC_FALLBACK}"
     PHP_EXEC="$DEFAULT_PHP_EXEC_FALLBACK"
-    if [[ ! -x "$PHP_EXEC" ]]; then
-        print_error "Fallback PHP executable '$PHP_EXEC' not found or not executable."
-        exit 1
-    fi
+    if [[ ! -x "$PHP_EXEC" ]]; then print_error "Fallback PHP '$PHP_EXEC' not executable."; exit 1; fi
 else
     print_info "Using PHP executable found at: ${PHP_EXEC}"
 fi
-if [[ ! -x "$PHP_EXEC" ]]; then
-    print_error "The determined PHP executable path '$PHP_EXEC' is not executable."
-    exit 1
-fi
+if [[ ! -x "$PHP_EXEC" ]]; then print_error "PHP executable path '$PHP_EXEC' is not executable."; exit 1; fi
 
 # 6. Read Moodle config.php using PHP
-print_info "Verifying executable permission for PHP: $PHP_EXEC"; if [[ ! -x "$PHP_EXEC" ]]; then print_error "...failed."; exit 1; fi
-print_info "Verifying read permission for Moodle config: $MOODLE_CONFIG_PATH"; if [[ ! -r "$MOODLE_CONFIG_PATH" ]]; then print_error "...failed."; exit 1; fi
+print_info "Verifying PHP executable: $PHP_EXEC"; if [[ ! -x "$PHP_EXEC" ]]; then print_error "...failed."; exit 1; fi
+print_info "Verifying Moodle config readability: $MOODLE_CONFIG_PATH"; if [[ ! -r "$MOODLE_CONFIG_PATH" ]]; then print_error "...failed."; exit 1; fi
 PHP_TEMP_SCRIPT=$(mktemp --suffix=.php); trap 'echo "INFO: Cleaning up temp PHP script ${PHP_TEMP_SCRIPT}..."; rm -f "$PHP_TEMP_SCRIPT"' EXIT INT TERM
-print_info "Reading database credentials (excluding password) and table prefix from ${MOODLE_CONFIG_PATH} (using $PHP_EXEC)..."
+print_info "Reading Moodle config (excluding password)..."
 cat << EOF > "$PHP_TEMP_SCRIPT"
 <?php
 error_reporting(E_ALL); ini_set('display_errors', 'stderr');
 define('CLI_SCRIPT', true);
 \$configfile = '$MOODLE_CONFIG_PATH';
 @require_once(\$configfile);
-if (!isset(\$CFG) || !is_object(\$CFG)) {
-    fwrite(STDERR, "ERROR: Failed to load Moodle config or \$CFG object not found in $configfile\n");
-    exit(1);
-}
-if (!isset(\$CFG->dbhost, \$CFG->dbname, \$CFG->dbuser, \$CFG->prefix)) {
-     fwrite(STDERR, "ERROR: Missing one or more required DB config values (dbhost, dbname, dbuser, prefix) in \$CFG object from $configfile\n");
-     exit(1);
-}
-echo 'dbhost=' . \$CFG->dbhost . "\n";
-echo 'dbname=' . \$CFG->dbname . "\n";
-echo 'dbuser=' . \$CFG->dbuser . "\n";
-echo 'prefix=' . \$CFG->prefix . "\n";
-exit(0);
+if (!isset(\$CFG) || !is_object(\$CFG)) { fwrite(STDERR, "ERROR: Failed to load Moodle config.\n"); exit(1); }
+if (!isset(\$CFG->dbhost, \$CFG->dbname, \$CFG->dbuser, \$CFG->prefix)) { fwrite(STDERR, "ERROR: Missing DB config values.\n"); exit(1); }
+echo 'dbhost=' . \$CFG->dbhost . "\n"; echo 'dbname=' . \$CFG->dbname . "\n"; echo 'dbuser=' . \$CFG->dbuser . "\n"; echo 'prefix=' . \$CFG->prefix . "\n"; exit(0);
 EOF
 chmod 644 "$PHP_TEMP_SCRIPT"
-print_info "Executing: $PHP_EXEC -d display_errors=stderr -d error_reporting=E_ALL $PHP_TEMP_SCRIPT"
+print_info "Executing PHP script to get config..."
 set +e; COMBINED_OUTPUT=$($PHP_EXEC -d display_errors=stderr -d error_reporting=E_ALL "$PHP_TEMP_SCRIPT" 2>&1); PHP_EXIT_CODE=$?; set -e
 print_info "PHP execution finished. Exit Code: ${PHP_EXIT_CODE}"
-if [[ $PHP_EXIT_CODE -ne 0 ]]; then print_error "PHP script execution FAILED. Output:"; print_error "$COMBINED_OUTPUT" >&2; exit 1; fi
+if [[ $PHP_EXIT_CODE -ne 0 ]]; then print_error "PHP script FAILED. Output:"; print_error "$COMBINED_OUTPUT" >&2; exit 1; fi
 rm -f "$PHP_TEMP_SCRIPT"; trap - EXIT INT TERM
 CONFIG_OUTPUT=$(echo "$COMBINED_OUTPUT" | grep '=')
-if [[ -z "$CONFIG_OUTPUT" ]]; then print_error "PHP script execution succeeded but produced NO expected output."; print_error "Output was:"; print_error "$COMBINED_OUTPUT" >&2; exit 1; fi
+if [[ -z "$CONFIG_OUTPUT" ]]; then print_error "PHP script succeeded but no output."; print_error "Output was:"; print_error "$COMBINED_OUTPUT" >&2; exit 1; fi
 while IFS='=' read -r key value; do case "$key" in dbhost) DB_HOST="$value" ;; dbname) DB_NAME="$value" ;; dbuser) DB_USER="$value" ;; prefix) DB_PREFIX="$value" ;; esac; done <<< "$CONFIG_OUTPUT"
-if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PREFIX" ]]; then print_error "Could not extract all required DB variables or prefix from PHP output."; exit 1; fi
-print_info "Successfully extracted Moodle DB configuration (excluding password) and prefix."
+if [[ -z "$DB_HOST" || -z "$DB_NAME" || -z "$DB_USER" || -z "$DB_PREFIX" ]]; then print_error "Could not extract DB variables."; exit 1; fi
+print_info "Successfully extracted Moodle DB config (excluding password)."
 
 # 7. Determine Web Server User
-print_info "Attempting to automatically determine web server user..."
+print_info "Determining web server user..."
 DETECTED_WEB_USER=""
-if ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then DETECTED_WEB_USER="www-data"; print_info "Detected Apache process and 'www-data' user exists.";
-elif ps aux | grep 'nginx' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then DETECTED_WEB_USER="www-data"; print_info "Detected Nginx process and 'www-data' user exists.";
-elif id -u "daemon" > /dev/null 2>&1; then DETECTED_WEB_USER="daemon"; print_info "Detected 'daemon' user exists.";
+if ps aux | grep -E 'apache2|httpd' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then DETECTED_WEB_USER="www-data"; print_info "Detected Apache/www-data.";
+elif ps aux | grep 'nginx' | grep -v grep > /dev/null && id -u "www-data" > /dev/null 2>&1; then DETECTED_WEB_USER="www-data"; print_info "Detected Nginx/www-data.";
+elif id -u "daemon" > /dev/null 2>&1; then DETECTED_WEB_USER="daemon"; print_info "Detected daemon user.";
 fi
-if [[ -z "$DETECTED_WEB_USER" ]]; then WEB_USER="${DEFAULT_WEB_USER}"; print_warning "Could not detect web server user. Falling back to default: '${WEB_USER}'.";
-else WEB_USER="$DETECTED_WEB_USER"; print_info "Using detected web server user: ${WEB_USER}";
+if [[ -z "$DETECTED_WEB_USER" ]]; then WEB_USER="${DEFAULT_WEB_USER}"; print_warning "Could not detect web user. Using default: '${WEB_USER}'.";
+else WEB_USER="$DETECTED_WEB_USER"; print_info "Using detected user: ${WEB_USER}";
 fi
 print_info "Verifying user '${WEB_USER}' exists..."
-if ! id -u "$WEB_USER" > /dev/null 2>&1; then
-    print_error "FATAL: The web server user '${WEB_USER}' not found!"; print_error "Manually edit 'web_server_user' in ${APP_DIR}/${CONFIG_NAME} and fix CLI script ownership."; exit 1;
+if ! id -u "$WEB_USER" > /dev/null 2>&1; then print_error "FATAL: User '${WEB_USER}' not found!"; exit 1;
 else print_info "User '${WEB_USER}' confirmed.";
 fi
 
@@ -157,7 +140,7 @@ print_info "Downloading PHP CLI script..."
 curl -fsSL "${PHP_CLI_SCRIPT_URL}" -o "${PHP_CLI_SCRIPT_NAME}"
 
 # 9. Generate config.ini
-print_info "Checking for existing config file: ${APP_DIR}/${CONFIG_NAME}"
+print_info "Checking config file: ${APP_DIR}/${CONFIG_NAME}"
 if [[ ! -f "${APP_DIR}/${CONFIG_NAME}" ]]; then
     print_info "Generating configuration file: ${APP_DIR}/${CONFIG_NAME}"
     cat << EOF > "${APP_DIR}/${CONFIG_NAME}"
@@ -190,11 +173,11 @@ cli_script_path = ${MOODLE_CLI_REL_PATH}/${PHP_CLI_SCRIPT_NAME}
 # Enable email notifications for Moodle blocks (requires address below)
 enable_email_notification = false
 
-# Email address to send Moodle block notifications to (must be set if above is true)
+# Email address of an existing Moodle user to send notifications to (must be set if above is true)
 notification_email_address =
 
 [fail2ban]
-# Path Fail2ban will monitor
+# Path Fail2ban will monitor (if enabled below)
 log_path = ${FAIL2BAN_LOG_PATH}
 
 [actions]
@@ -202,35 +185,34 @@ log_path = ${FAIL2BAN_LOG_PATH}
 enable_moodle_ip_blocking = true
 
 # Set to true to block IPs using Fail2ban and firewall rules (e.g., iptables)
-enable_fail2ban_blocking = true
+# Default is false as Moodle IP blocking is generally preferred.
+enable_fail2ban_blocking = false
 EOF
     chmod 600 "${CONFIG_NAME}"
     print_info "Generated ${CONFIG_NAME}."
 else
-    print_warning "Config file ${APP_DIR}/${CONFIG_NAME} already exists. Skipping generation."
-    print_warning "Ensure it does NOT contain 'password =' under [database]."
-    print_warning "Ensure 'enable_moodle_ip_blocking' exists under [actions]."
-    print_warning "Ensure email options exist under [moodle]."
+    print_warning "Config file ${APP_DIR}/${CONFIG_NAME} exists. Skipping generation."
+    print_warning "Verify settings manually, especially [actions] and [moodle] email options."
 fi
 
 # 10. Place Moodle CLI Script
 MOODLE_CLI_TARGET_DIR="${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}"
 MOODLE_CLI_FULL_PATH="${MOODLE_CLI_TARGET_DIR}/${PHP_CLI_SCRIPT_NAME}"
-print_info "Checking for Moodle CLI script: ${MOODLE_CLI_FULL_PATH}"
+print_info "Checking Moodle CLI script: ${MOODLE_CLI_FULL_PATH}"
 if [[ ! -f "$MOODLE_CLI_FULL_PATH" ]]; then
     print_info "Creating Moodle CLI script directory: ${MOODLE_CLI_TARGET_DIR}"
     mkdir -p "${MOODLE_CLI_TARGET_DIR}"
-    print_info "Moving PHP CLI script to ${MOODLE_CLI_FULL_PATH}"
+    print_info "Moving PHP script to ${MOODLE_CLI_FULL_PATH}"
     mv "${PHP_CLI_SCRIPT_NAME}" "${MOODLE_CLI_FULL_PATH}"
     chown root:"${WEB_USER}" "${MOODLE_CLI_FULL_PATH}"
     chmod 640 "${MOODLE_CLI_FULL_PATH}"
-    print_info "Set ownership of Moodle CLI script to root:${WEB_USER}."
+    print_info "Set ownership of Moodle CLI script."
 else
-    print_warning "Moodle CLI script ${MOODLE_CLI_FULL_PATH} already exists. Skipping."
+    print_warning "Moodle CLI script ${MOODLE_CLI_FULL_PATH} exists. Skipping placement."
     if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
 fi
 
-# 11. Configure Fail2ban
+# 11. Configure Fail2ban (Files always created, functionality depends on config.ini)
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
@@ -241,15 +223,16 @@ if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then
 failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]
 ignoreregex =
 EOF
-else
-    print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists.";
-fi
+else print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} exists."; fi
 
 print_info "Checking Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
 if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
     print_info "Configuring Fail2ban jail...";
     cat << EOF > "${FAIL2BAN_JAIL_PATH}"
 [${FAIL2BAN_JAIL_NAME}]
+# Enabled setting here is for Fail2ban itself. Actual blocking depends on
+# enable_fail2ban_blocking=true in /opt/moodle-blocker/config.ini which controls
+# whether IPs are written to the logpath below.
 enabled = true
 port = http,https
 filter = ${FAIL2BAN_FILTER_NAME}
@@ -259,12 +242,10 @@ findtime = 300
 bantime = 3600
 action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]
 EOF
-else
-    print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists.";
-fi
+else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} exists."; fi
 
 print_info "Reloading Fail2ban configuration..."
-if ! command -v iptables &> /dev/null; then print_warning "iptables command not found. Fail2ban might fail."; fi
+if ! command -v iptables &> /dev/null; then print_warning "iptables command not found."; fi
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
 
 # 12. Setup Cron Job
@@ -280,7 +261,7 @@ EOF
 chmod 0644 "${CRON_FILE_PATH}"
 systemctl enable cron; systemctl restart cron
 
-# 13. Create Log Files and Set Initial Permissions
+# 13. Create Log Files and Set Permissions
 print_info "Creating log/state files and setting permissions..."
 touch "${APP_DIR}/${LOG_FILE_NAME}" \
       "${APP_DIR}/${CRON_LOG_NAME}" \
@@ -288,32 +269,13 @@ touch "${APP_DIR}/${LOG_FILE_NAME}" \
       "${APP_DIR}/${STATE_FILE_NAME}" \
       "${APP_DIR}/${CONFIG_NAME}"
 
-print_info "Setting permissions for ${APP_DIR}..."
-chown root:root "${APP_DIR}"
-chmod 755 "${APP_DIR}"
-
-print_info "Setting permissions for ${VENV_DIR}..."
+chown root:root "${APP_DIR}"; chmod 755 "${APP_DIR}"
 chown root:root "${VENV_DIR}" -R
-
-print_info "Setting permissions for ${APP_DIR}/${LOG_FILE_NAME}"
-chown root:root "${APP_DIR}/${LOG_FILE_NAME}"
-chmod 644 "${APP_DIR}/${LOG_FILE_NAME}"
-
-print_info "Setting permissions for ${APP_DIR}/${CRON_LOG_NAME}"
-chown root:root "${APP_DIR}/${CRON_LOG_NAME}"
-chmod 644 "${APP_DIR}/${CRON_LOG_NAME}"
-
-print_info "Setting permissions for ${APP_DIR}/${STATE_FILE_NAME}"
-chown root:root "${APP_DIR}/${STATE_FILE_NAME}"
-chmod 644 "${APP_DIR}/${STATE_FILE_NAME}"
-
-print_info "Setting permissions for ${APP_DIR}/${CONFIG_NAME}"
-chown root:root "${APP_DIR}/${CONFIG_NAME}"
+chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
 chmod 600 "${APP_DIR}/${CONFIG_NAME}"
-
-print_info "Setting permissions for ${FAIL2BAN_LOG_PATH}"
-chown root:adm "${FAIL2BAN_LOG_PATH}"
-chmod 640 "${FAIL2BAN_LOG_PATH}"
+chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
+chown root:adm "${FAIL2BAN_LOG_PATH}"; chmod 640 "${FAIL2BAN_LOG_PATH}"
+print_info "Permissions set."
 
 # --- Final Instructions ---
 echo ""
@@ -321,43 +283,41 @@ print_info "--------------------------------------------------------------------
 print_info " Moodle Auto IP Blocker Setup Complete!"
 print_info "---------------------------------------------------------------------"
 echo ""
-print_info "Configuration based on:"
-echo "  - Moodle Directory: ${MOODLE_ROOT}"
-echo "  - Moodle config:    ${MOODLE_CONFIG_PATH}"
-echo "  - Web User:         ${WEB_USER}"
-echo "  - PHP Path Used:    ${PHP_EXEC}"
-echo ""
-print_info "*** Security Improvement: Database password is NOT stored in ${APP_DIR}/${CONFIG_NAME} ***"
-echo ""
-print_info "Dependencies installed: python3, pip, venv, fail2ban, cron, iptables"
-print_info "Python dependencies installed in: ${VENV_DIR}"
+print_info "Configuration Summary:"
+echo "  - App Directory:      ${APP_DIR}"
+echo "  - Moodle Directory:   ${MOODLE_ROOT}"
+echo "  - Web User Used:      ${WEB_USER}"
+echo "  - PHP Path Used:      ${PHP_EXEC}"
+echo "  - Config File:        ${APP_DIR}/${CONFIG_NAME}"
+echo "  - Python Script:      ${APP_DIR}/${PYTHON_SCRIPT_NAME}"
+echo "  - Moodle CLI Script:  ${MOODLE_CLI_FULL_PATH}"
+echo "  - Cron Job:           ${CRON_FILE_PATH}"
 echo ""
 print_warning "!!!!!!!!!!!!!!!!!!!! IMPORTANT VERIFICATION !!!!!!!!!!!!!!!!!!!!"
 echo ""
-print_warning "Verify PHP executable: '${PHP_EXEC}'."
-print_warning "Verify Web Server User: '${WEB_USER}'."
-echo ""
-print_warning "If PHP path is wrong, edit 'php_executable' in ${APP_DIR}/${CONFIG_NAME}."
-print_warning "If Web User is wrong, edit 'web_server_user' in ${APP_DIR}/${CONFIG_NAME} AND"
-print_warning "manually run 'sudo chown root:CORRECT_USER ${MOODLE_CLI_FULL_PATH}'"
+print_warning "Verify settings in ${APP_DIR}/${CONFIG_NAME}, especially:"
+print_warning "  - php_executable = ${PHP_EXEC}"
+print_warning "  - web_server_user = ${WEB_USER}"
+print_warning "If Web User is wrong, also run: 'sudo chown root:CORRECT_USER ${MOODLE_CLI_FULL_PATH}'"
 echo ""
 print_warning "!!!!!!!!!!!!!!!!!!!! BLOCKING & NOTIFICATION CONFIGURATION !!!!!!!!!!!!!!!!"
 echo ""
-print_warning "Review ${APP_DIR}/${CONFIG_NAME} to configure blocking methods and notifications:"
-echo "  - [actions] enable_moodle_ip_blocking = true  (Default: Moodle internal block)"
-echo "  - [actions] enable_fail2ban_blocking = true   (Default: Fail2ban/firewall block)"
-echo "  - [moodle] enable_email_notification = false (Default: Email disabled)"
-echo "  - [moodle] notification_email_address =     (Default: No recipient)"
-print_warning "Ensure Moodle mail settings are configured if enabling email."
-print_warning "Ensure iptables is functional if using Fail2ban."
+print_warning "Review ${APP_DIR}/${CONFIG_NAME} to configure:"
+echo "  - [actions] enable_moodle_ip_blocking = true    (Default: Moodle internal blocking ENABLED)"
+echo "  - [actions] enable_fail2ban_blocking = false  (Default: Fail2ban firewall blocking DISABLED)"
+echo "  - [moodle] enable_email_notification = false  (Default: Email DISABLED)"
+echo "  - [moodle] notification_email_address =      (Default: No recipient)"
+print_warning "To enable Fail2ban, set enable_fail2ban_blocking=true and ensure iptables works."
+print_warning "To enable email, set enable_email_notification=true, provide a valid Moodle user's email"
+print_warning "in notification_email_address, and ensure Moodle mail is configured."
 echo ""
 print_info "CHECK LOGS:"
-echo "  - Script log: ${APP_DIR}/${LOG_FILE_NAME}"
-echo "  - Cron log:   ${APP_DIR}/${CRON_LOG_NAME}"
-echo "  - Fail2ban log: /var/log/fail2ban.log"
-echo "  - Fail2ban target: ${FAIL2BAN_LOG_PATH} (if enabled)"
+echo "  - Script Log:      ${APP_DIR}/${LOG_FILE_NAME}"
+echo "  - Cron Output Log: ${APP_DIR}/${CRON_LOG_NAME} (Should be empty unless script crashes)"
+echo "  - Fail2ban Log:    /var/log/fail2ban.log (General Fail2ban activity)"
+echo "  - Fail2ban Target: ${FAIL2BAN_LOG_PATH} (Only logs IPs if enable_fail2ban_blocking=true)"
 echo ""
-print_info "Cron job set to run every minute."
+print_info "Cron job is now active and runs every minute."
 print_info "---------------------------------------------------------------------"
 
 exit 0
