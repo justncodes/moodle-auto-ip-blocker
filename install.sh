@@ -95,7 +95,7 @@ if [[ ! -x "$PHP_EXEC" ]]; then
     exit 1
 fi
 
-# 6. Read Moodle config.php using PHP (DB details EXCEPT password and prefix)
+# 6. Read Moodle config.php using PHP
 print_info "Verifying executable permission for PHP: $PHP_EXEC"; if [[ ! -x "$PHP_EXEC" ]]; then print_error "...failed."; exit 1; fi
 print_info "Verifying read permission for Moodle config: $MOODLE_CONFIG_PATH"; if [[ ! -r "$MOODLE_CONFIG_PATH" ]]; then print_error "...failed."; exit 1; fi
 PHP_TEMP_SCRIPT=$(mktemp --suffix=.php); trap 'echo "INFO: Cleaning up temp PHP script ${PHP_TEMP_SCRIPT}..."; rm -f "$PHP_TEMP_SCRIPT"' EXIT INT TERM
@@ -234,9 +234,35 @@ fi
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
 print_info "Checking Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
-if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then print_info "Configuring Fail2ban filter..."; cat << EOF > "${FAIL2BAN_FILTER_PATH}"; [Definition]\nfailregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]\nignoreregex =\nEOF; else print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists."; fi
+if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then
+    print_info "Configuring Fail2ban filter...";
+    cat << EOF > "${FAIL2BAN_FILTER_PATH}"
+[Definition]
+failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]
+ignoreregex =
+EOF
+else
+    print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} already exists.";
+fi
+
 print_info "Checking Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
-if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then print_info "Configuring Fail2ban jail..."; cat << EOF > "${FAIL2BAN_JAIL_PATH}"; [${FAIL2BAN_JAIL_NAME}]\nenabled = true\nport = http,https\nfilter = ${FAIL2BAN_FILTER_NAME}\nlogpath = ${FAIL2BAN_LOG_PATH}\nmaxretry = 1\nfindtime = 300\nbantime = 3600\naction = iptables-multiport[name=MoodleAuthCustom, port="http,https"]\nEOF; else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists."; fi
+if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
+    print_info "Configuring Fail2ban jail...";
+    cat << EOF > "${FAIL2BAN_JAIL_PATH}"
+[${FAIL2BAN_JAIL_NAME}]
+enabled = true
+port = http,https
+filter = ${FAIL2BAN_FILTER_NAME}
+logpath = ${FAIL2BAN_LOG_PATH}
+maxretry = 1
+findtime = 300
+bantime = 3600
+action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]
+EOF
+else
+    print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} already exists.";
+fi
+
 print_info "Reloading Fail2ban configuration..."
 if ! command -v iptables &> /dev/null; then print_warning "iptables command not found. Fail2ban might fail."; fi
 if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
@@ -255,14 +281,39 @@ chmod 0644 "${CRON_FILE_PATH}"
 systemctl enable cron; systemctl restart cron
 
 # 13. Create Log Files and Set Initial Permissions
-print_info "Creating log files and setting permissions..."
-touch "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${FAIL2BAN_LOG_PATH}"
-chown root:root "${APP_DIR}"; chmod 755 "${APP_DIR}"
+print_info "Creating log/state files and setting permissions..."
+touch "${APP_DIR}/${LOG_FILE_NAME}" \
+      "${APP_DIR}/${CRON_LOG_NAME}" \
+      "${FAIL2BAN_LOG_PATH}" \
+      "${APP_DIR}/${STATE_FILE_NAME}" \
+      "${APP_DIR}/${CONFIG_NAME}"
+
+print_info "Setting permissions for ${APP_DIR}..."
+chown root:root "${APP_DIR}"
+chmod 755 "${APP_DIR}"
+
+print_info "Setting permissions for ${VENV_DIR}..."
 chown root:root "${VENV_DIR}" -R
-chown root:root "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}" "${APP_DIR}/${CONFIG_NAME}"
+
+print_info "Setting permissions for ${APP_DIR}/${LOG_FILE_NAME}"
+chown root:root "${APP_DIR}/${LOG_FILE_NAME}"
+chmod 644 "${APP_DIR}/${LOG_FILE_NAME}"
+
+print_info "Setting permissions for ${APP_DIR}/${CRON_LOG_NAME}"
+chown root:root "${APP_DIR}/${CRON_LOG_NAME}"
+chmod 644 "${APP_DIR}/${CRON_LOG_NAME}"
+
+print_info "Setting permissions for ${APP_DIR}/${STATE_FILE_NAME}"
+chown root:root "${APP_DIR}/${STATE_FILE_NAME}"
+chmod 644 "${APP_DIR}/${STATE_FILE_NAME}"
+
+print_info "Setting permissions for ${APP_DIR}/${CONFIG_NAME}"
+chown root:root "${APP_DIR}/${CONFIG_NAME}"
 chmod 600 "${APP_DIR}/${CONFIG_NAME}"
-chmod 644 "${APP_DIR}/${LOG_FILE_NAME}" "${APP_DIR}/${CRON_LOG_NAME}" "${APP_DIR}/${STATE_FILE_NAME}"
-chown root:adm "${FAIL2BAN_LOG_PATH}"; chmod 640 "${FAIL2BAN_LOG_PATH}"
+
+print_info "Setting permissions for ${FAIL2BAN_LOG_PATH}"
+chown root:adm "${FAIL2BAN_LOG_PATH}"
+chmod 640 "${FAIL2BAN_LOG_PATH}"
 
 # --- Final Instructions ---
 echo ""

@@ -35,7 +35,6 @@ fail2ban_handler = None
 
 # --- Functions ---
 def read_last_id(filepath):
-    """Reads the last processed log ID from the state file."""
     try:
         if not os.path.exists(filepath):
             logger.info(f"State file '{filepath}' not found, starting from ID 0.")
@@ -56,7 +55,6 @@ def read_last_id(filepath):
         sys.exit(1)
 
 def write_last_id(filepath, last_id):
-    """Writes the last processed log ID to the state file."""
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(str(last_id))
@@ -65,7 +63,6 @@ def write_last_id(filepath, last_id):
         logger.error(f"Error writing state file '{filepath}'.", exc_info=True)
 
 def get_moodle_db_password(config):
-    """Reads Moodle DB password directly from config.php using PHP CLI."""
     try:
         php_bin = config.get('moodle', 'php_executable')
         moodle_root = config.get('moodle', 'wwwroot')
@@ -79,23 +76,27 @@ def get_moodle_db_password(config):
              else:
                  raise PermissionError(f"Read permission denied for {config_php_path}")
 
+        config_php_path_norm = os.path.normpath(config_php_path).replace('\\', '/')
+
         php_code = f"""
         error_reporting(0);
         define('CLI_SCRIPT', true);
-        @require_once('{config_php_path}');
-        if (!isset(\$CFG) || !is_object(\$CFG) || !isset(\$CFG->dbpass)) {{
-            fwrite(STDERR, 'Error: Could not load config.php or find \$CFG->dbpass\\n');
+        @require_once('{config_php_path_norm}');
+        if (!isset($CFG) || !is_object($CFG) || !isset($CFG->dbpass)) {{
+            fwrite(STDERR, 'Error: Could not load config ({config_php_path_norm}) or find $CFG->dbpass\\n');
             exit(1);
         }}
-        echo \$CFG->dbpass;
+        echo $CFG->dbpass;
         exit(0);
         """
 
-        logger.debug(f"Retrieving DB password via PHP CLI: {php_bin}")
+        logger.debug(f"PHP code to execute for password retrieval:\n---\n{php_code}\n---")
+        logger.debug(f"Attempting password retrieval via PHP CLI: {php_bin}")
         result = subprocess.run([php_bin, "-r", php_code],
                                 capture_output=True, text=True, check=False, encoding='utf-8')
 
         if result.returncode != 0:
+            logger.error(f"PHP code executed (failed):\n---\n{php_code}\n---")
             raise RuntimeError(f"PHP failed (RC {result.returncode}) getting password. Stderr: {result.stderr.strip()}")
 
         password = result.stdout.strip()
@@ -110,7 +111,6 @@ def get_moodle_db_password(config):
         raise
 
 def call_moodle_cli(config, ip_address):
-    """Calls the Moodle CLI script to block the IP, potentially passing email info."""
     try:
         php_bin = config.get('moodle', 'php_executable')
         moodle_root = config.get('moodle', 'wwwroot')
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     cnx = None
     cursor = None
     config = configparser.ConfigParser()
-    enable_moodle_blocking_action = False # Renamed variable
+    enable_moodle_blocking_action = False
     enable_fail2ban_blocking_action = False
     last_processed_id = 0
     exit_code = 0
@@ -186,7 +186,7 @@ if __name__ == "__main__":
 
         # Get desired actions
         try:
-            enable_moodle_blocking_action = config.getboolean('actions', 'enable_moodle_ip_blocking', fallback=False) # Use new name
+            enable_moodle_blocking_action = config.getboolean('actions', 'enable_moodle_ip_blocking', fallback=False)
             enable_fail2ban_blocking_action = config.getboolean('actions', 'enable_fail2ban_blocking', fallback=False)
             logger.info(f"Action Settings: Moodle IP Blocking: {enable_moodle_blocking_action}, Fail2ban Blocking: {enable_fail2ban_blocking_action}")
         except (configparser.NoSectionError, configparser.NoOptionError, ValueError) as e:
@@ -217,10 +217,10 @@ if __name__ == "__main__":
         failure_threshold = config.getint('rules', 'failure_threshold', fallback=10)
 
         # Get password from Moodle
-        db_password = get_moodle_db_password(config) # Raises exception on failure
+        db_password = get_moodle_db_password(config)
 
         # Get last processed ID
-        last_processed_id = read_last_id(STATE_FILE) # Exits on failure
+        last_processed_id = read_last_id(STATE_FILE)
 
         # Connect to database
         cnx = None
