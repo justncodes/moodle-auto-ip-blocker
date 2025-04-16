@@ -132,11 +132,11 @@ else print_info "User '${WEB_USER}' confirmed.";
 fi
 
 # Step 8: Download Scripts
-print_info "Downloading Python script..."
+print_info "Downloading Python script (${PYTHON_SCRIPT_NAME})..."
 cd "${APP_DIR}"
 curl -fsSL "${PYTHON_SCRIPT_URL}" -o "${PYTHON_SCRIPT_NAME}"
 chmod +x "${PYTHON_SCRIPT_NAME}"
-print_info "Downloading PHP CLI script..."
+print_info "Downloading PHP CLI script (${PHP_CLI_SCRIPT_NAME})..."
 curl -fsSL "${PHP_CLI_SCRIPT_URL}" -o "${PHP_CLI_SCRIPT_NAME}"
 
 # Step 9: Generate config.ini
@@ -193,25 +193,27 @@ EOF
     print_info "Generated ${CONFIG_NAME}."
 else
     print_warning "Config file ${APP_DIR}/${CONFIG_NAME} exists. Skipping generation."
-    print_warning "Verify settings manually, especially [actions] and [moodle] email options."
+    print_warning "Verify settings manually if needed."
 fi
 
 # Step 10: Place Moodle CLI Script
 MOODLE_CLI_TARGET_DIR="${MOODLE_ROOT}/${MOODLE_CLI_REL_PATH}"
 MOODLE_CLI_FULL_PATH="${MOODLE_CLI_TARGET_DIR}/${PHP_CLI_SCRIPT_NAME}"
-print_info "Checking Moodle CLI script: ${MOODLE_CLI_FULL_PATH}"
-if [[ ! -f "$MOODLE_CLI_FULL_PATH" ]]; then
-    print_info "Creating Moodle CLI script directory: ${MOODLE_CLI_TARGET_DIR}"
-    mkdir -p "${MOODLE_CLI_TARGET_DIR}"
-    print_info "Moving PHP script to ${MOODLE_CLI_FULL_PATH}"
-    mv "${PHP_CLI_SCRIPT_NAME}" "${MOODLE_CLI_FULL_PATH}"
+print_info "Placing Moodle CLI script: ${MOODLE_CLI_FULL_PATH}"
+mkdir -p "${MOODLE_CLI_TARGET_DIR}"
+if [[ -f "$MOODLE_CLI_FULL_PATH" ]]; then
+    print_warning "Existing Moodle CLI script found. Overwriting with downloaded version."
+fi
+if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then
+    mv -f "${PHP_CLI_SCRIPT_NAME}" "${MOODLE_CLI_FULL_PATH}"
     chown root:"${WEB_USER}" "${MOODLE_CLI_FULL_PATH}"
     chmod 640 "${MOODLE_CLI_FULL_PATH}"
-    print_info "Set ownership of Moodle CLI script."
+    print_info "Placed/Updated Moodle CLI script and set ownership/permissions."
 else
-    print_warning "Moodle CLI script ${MOODLE_CLI_FULL_PATH} exists. Skipping placement."
-    if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
+    print_error "Downloaded PHP CLI script (${APP_DIR}/${PHP_CLI_SCRIPT_NAME}) not found. Cannot place it."
+    exit 1
 fi
+if [[ -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}" ]]; then rm -f "${APP_DIR}/${PHP_CLI_SCRIPT_NAME}"; fi
 
 # Step 11: Create Log Files and Set Permissions
 print_info "Creating log/state files and setting permissions..."
@@ -233,20 +235,17 @@ print_info "Permissions set."
 # Step 12: Configure Fail2ban
 FAIL2BAN_FILTER_PATH="/etc/fail2ban/filter.d/${FAIL2BAN_FILTER_NAME}.conf"
 FAIL2BAN_JAIL_PATH="/etc/fail2ban/jail.d/${FAIL2BAN_JAIL_NAME}.conf"
-print_info "Checking Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
-if [[ ! -f "$FAIL2BAN_FILTER_PATH" ]]; then
-    print_info "Configuring Fail2ban filter...";
-    cat << EOF > "${FAIL2BAN_FILTER_PATH}"
+print_info "Checking/Configuring Fail2ban filter: ${FAIL2BAN_FILTER_PATH}"
+if [[ -f "$FAIL2BAN_FILTER_PATH" ]]; then print_warning "Overwriting existing Fail2ban filter."; fi
+cat << EOF > "${FAIL2BAN_FILTER_PATH}"
 [Definition]
 failregex = ^\s*.*MoodleLoginFail \[IP: <HOST>\]
 ignoreregex =
 EOF
-else print_warning "Fail2ban filter ${FAIL2BAN_FILTER_PATH} exists."; fi
 
-print_info "Checking Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
-if [[ ! -f "$FAIL2BAN_JAIL_PATH" ]]; then
-    print_info "Configuring Fail2ban jail...";
-    cat << EOF > "${FAIL2BAN_JAIL_PATH}"
+print_info "Checking/Configuring Fail2ban jail: ${FAIL2BAN_JAIL_PATH}"
+if [[ -f "$FAIL2BAN_JAIL_PATH" ]]; then print_warning "Overwriting existing Fail2ban jail."; fi
+cat << EOF > "${FAIL2BAN_JAIL_PATH}"
 [${FAIL2BAN_JAIL_NAME}]
 # Enabled setting here is for Fail2ban itself. Actual blocking depends on
 # enable_fail2ban_blocking=true in /opt/moodle-blocker/config.ini which controls
@@ -260,16 +259,20 @@ findtime = 300
 bantime = 3600
 action = iptables-multiport[name=MoodleAuthCustom, port="http,https"]
 EOF
-else print_warning "Fail2ban jail ${FAIL2BAN_JAIL_PATH} exists."; fi
 
 print_info "Reloading Fail2ban configuration..."
 if ! command -v iptables &> /dev/null; then print_warning "iptables command not found."; fi
-if systemctl is-active --quiet fail2ban; then systemctl reload fail2ban; else systemctl enable fail2ban; systemctl restart fail2ban; fi
+if systemctl is-active --quiet fail2ban; then
+    systemctl reload fail2ban || { print_warning "Fail2ban reload failed, attempting restart..."; systemctl restart fail2ban; }
+else
+    print_info "Fail2ban not active, enabling and starting..."
+    systemctl enable fail2ban; systemctl restart fail2ban;
+fi
 
 # Step 13: Setup Cron Job
 CRON_FILE_PATH="/etc/cron.d/${CRON_FILE_NAME}"
 PYTHON_EXEC_VENV="${VENV_DIR}/bin/python3"
-print_info "Setting up cron job: ${CRON_FILE_PATH}"
+print_info "Setting up/Overwriting cron job: ${CRON_FILE_PATH}"
 cat << EOF > "${CRON_FILE_PATH}"
 # Run Moodle IP Blocker script every minute using virtual environment
 SHELL=/bin/bash
@@ -277,7 +280,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 * * * * * root ${PYTHON_EXEC_VENV} ${APP_DIR}/${PYTHON_SCRIPT_NAME} >> ${APP_DIR}/${CRON_LOG_NAME} 2>&1
 EOF
 chmod 0644 "${CRON_FILE_PATH}"
-systemctl enable cron; systemctl restart cron
+systemctl enable cron >/dev/null 2>&1 || true
+systemctl start cron >/dev/null 2>&1 || systemctl restart cron >/dev/null 2>&1 || print_warning "Could not start/restart cron service."
 
 # --- Final Instructions ---
 echo ""
@@ -311,7 +315,7 @@ echo "  - [moodle] enable_email_notification = false  (Default: Email DISABLED)"
 echo "  - [moodle] notification_email_address =      (Default: No recipient. Use comma-separated list for multiple emails)"
 print_warning "To enable Fail2ban, set enable_fail2ban_blocking=true and ensure iptables works."
 print_warning "To enable email, set enable_email_notification=true, provide a comma-separated list of valid"
-print_warning "Moodle users' email addresses in notification_email_address, and ensure Moodle mail is configured."
+print_warning "email addresses in notification_email_address, and ensure Moodle mail is configured."
 echo ""
 print_info "CHECK LOGS:"
 echo "  - Script Log:      ${APP_DIR}/${LOG_FILE_NAME}"
